@@ -634,3 +634,189 @@ class TestSAURSimulation:
     def test_database_all_types_known(self):
         for g in OIL_BASE_GARRISON:
             assert g["type"] in UNIT_DATABASE, f"Unknown type: {g['type']}"
+
+
+# ===========================================================================
+# 11. Hierarchical action space tests (new)
+# ===========================================================================
+
+from saur_sim.rl_agent import (
+    ACTION_SPACE, ActionLevel, RTAction,
+    STRATEGIC_IDX, TACTICAL_IDX, OPERATIONAL_IDX,
+    get_action_mask, HierarchicalRLAgent, _CODE_TO_IDX,
+)
+
+
+class TestActionSpace:
+
+    def test_action_space_size(self):
+        assert len(ACTION_SPACE) == 15
+
+    def test_action_names_length_matches(self):
+        from saur_sim.rl_agent import ACTION_NAMES, ACTION_COST
+        assert len(ACTION_NAMES) == N_ACTIONS
+        assert len(ACTION_COST) == N_ACTIONS
+
+    def test_strategic_actions_count(self):
+        assert len(STRATEGIC_IDX) == 5
+
+    def test_tactical_actions_count(self):
+        assert len(TACTICAL_IDX) == 4
+
+    def test_operational_actions_count(self):
+        assert len(OPERATIONAL_IDX) == 6
+
+    def test_level_indices_disjoint(self):
+        all_idx = STRATEGIC_IDX + TACTICAL_IDX + OPERATIONAL_IDX
+        assert len(set(all_idx)) == 15
+        assert set(all_idx) == set(range(15))
+
+    def test_action_codes_unique(self):
+        codes = [a.code for a in ACTION_SPACE]
+        assert len(codes) == len(set(codes))
+
+    def test_action_costs_nonnegative(self):
+        for a in ACTION_SPACE:
+            assert a.cost >= 0.0
+
+    def test_code_to_idx_all_15(self):
+        assert len(_CODE_TO_IDX) == 15
+
+    def test_s1_is_strategic(self):
+        assert ACTION_SPACE[_CODE_TO_IDX["S1"]].level == ActionLevel.STRATEGIC
+
+    def test_t3_is_tactical(self):
+        assert ACTION_SPACE[_CODE_TO_IDX["T3"]].level == ActionLevel.TACTICAL
+
+    def test_o4_is_operational(self):
+        assert ACTION_SPACE[_CODE_TO_IDX["O4"]].level == ActionLevel.OPERATIONAL
+
+
+class TestActionMask:
+
+    def test_mask_shape(self):
+        m = get_action_mask(phase_idx=3, resource_level=1)
+        assert m.shape == (N_ACTIONS,)
+        assert m.dtype == bool
+
+    def test_normal_phase_limits_actions(self):
+        m = get_action_mask(phase_idx=0, resource_level=1)
+        # In NORMAL phase most actions are blocked
+        assert m.sum() <= 4
+
+    def test_active_fire_most_actions_available(self):
+        m = get_action_mask(phase_idx=3, resource_level=1,
+                            has_people=True, has_foam=True)
+        assert m.sum() >= 10
+
+    def test_no_people_blocks_s1_and_o5(self):
+        m = get_action_mask(phase_idx=3, resource_level=1, has_people=False)
+        assert not m[_CODE_TO_IDX["S1"]]
+        assert not m[_CODE_TO_IDX["O5"]]
+
+    def test_no_foam_blocks_o3(self):
+        m = get_action_mask(phase_idx=3, resource_level=1, has_foam=False)
+        assert not m[_CODE_TO_IDX["O3"]]
+
+    def test_high_resource_blocks_t3(self):
+        m = get_action_mask(phase_idx=3, resource_level=2)
+        assert not m[_CODE_TO_IDX["T3"]]
+
+    def test_at_least_one_action_always_valid(self):
+        for phase in range(7):
+            for res in range(3):
+                m = get_action_mask(phase_idx=phase, resource_level=res)
+                assert m.any(), f"No valid action at phase={phase} res={res}"
+
+    def test_mask_applied_in_select_action(self):
+        ag = QLearningAgent(seed=0, epsilon_start=0.0)
+        # Force Q values so action 0 is best but mask it out
+        state = RLState(3, 1, 2, 1)
+        ag.Q[state.to_index(), :] = 0.0
+        ag.Q[state.to_index(), 0] = 100.0   # best but will be masked
+        mask = np.ones(N_ACTIONS, dtype=bool)
+        mask[0] = False
+        chosen = ag.select_action(state, training=False, mask=mask)
+        assert chosen != 0
+
+
+class TestHierarchicalRLAgent:
+
+    def test_select_action_returns_valid_index(self):
+        ag = HierarchicalRLAgent(seed=0)
+        s = RLState(3, 1, 2, 1)
+        a = ag.select_action(s)
+        assert 0 <= a < N_ACTIONS
+
+    def test_strategic_tick_returns_strategic_action(self):
+        ag = HierarchicalRLAgent(seed=0, freq_strategic=1, freq_tactical=100,
+                                 epsilon_start=0.0)
+        s = RLState(3, 1, 2, 1)
+        # Set all strategic Q high
+        for idx in STRATEGIC_IDX:
+            local = STRATEGIC_IDX.index(idx)
+            ag._str_agent.Q[s.to_index(), local] = 10.0
+        a = ag.select_action(s, training=False)
+        assert a in STRATEGIC_IDX
+
+    def test_operational_tick_returns_operational_action(self):
+        ag = HierarchicalRLAgent(seed=0, freq_strategic=100, freq_tactical=100,
+                                 epsilon_start=0.0)
+        s = RLState(3, 1, 2, 1)
+        for local, idx in enumerate(OPERATIONAL_IDX):
+            ag._ope_agent.Q[s.to_index(), local] = 10.0
+        a = ag.select_action(s, training=False)
+        assert a in OPERATIONAL_IDX
+
+    def test_update_modifies_q(self):
+        ag = HierarchicalRLAgent(seed=0, freq_strategic=1)
+        s  = RLState(3, 1, 2, 1)
+        ns = RLState(3, 1, 3, 1)
+        ag.select_action(s, training=True)  # sets last_level
+        before = ag._str_agent.Q.copy()
+        ag.update(s, STRATEGIC_IDX[0], reward=1.0, next_state=ns, done=False)
+        assert not np.allclose(ag._str_agent.Q, before)
+
+    def test_decay_epsilon_affects_all_sub_agents(self):
+        ag = HierarchicalRLAgent(seed=0)
+        e0 = ag.epsilon
+        ag.decay_epsilon()
+        assert ag.epsilon <= e0
+
+    def test_save_load_roundtrip(self):
+        ag = HierarchicalRLAgent(seed=0)
+        ag._str_agent.Q[0, 0] = 3.14
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        try:
+            ag.save(path)
+            ag2 = HierarchicalRLAgent.load(path)
+            assert abs(ag2._str_agent.Q[0, 0] - 3.14) < 1e-9
+        finally:
+            os.unlink(path)
+
+
+class TestL3WithMasking:
+
+    def test_l3_allocate_action_respects_mask_normal_phase(self):
+        """In NORMAL phase only recon/scheme-change are valid."""
+        hq = L3OperationalHQ(seed=0)
+        hq.rl_agent = QLearningAgent(seed=0, epsilon_start=0.0)
+        sit = SituationState(phase=FirePhase.NORMAL, fire_area_m2=0.0)
+        rs  = ResourceSpace(vehicles=[
+            ResourceUnit("U1", "АЦ-40", 5),
+            ResourceUnit("U2", "АЦ-40", 5),
+        ])
+        action, result = hq.f_allocate(sit, rs, L7=1.0, L1=0.0, t=0.0,
+                                       training=False)
+        # NORMAL phase mask allows only T4(8) and O4(12)
+        assert action in (_CODE_TO_IDX["T4"], _CODE_TO_IDX["O4"])
+        assert isinstance(result, AdaptationResult)
+
+    def test_l3_all_15_actions_produce_result(self, l3_hq, resource_space):
+        sit = SituationState(phase=FirePhase.S3, fire_area_m2=3000.0,
+                             casualties=1)
+        for i in range(N_ACTIONS):
+            res = l3_hq._action_to_delta_pi(i, sit, resource_space, 0.0)
+            assert isinstance(res, AdaptationResult)
+            assert len(res.actions) > 0

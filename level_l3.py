@@ -10,7 +10,9 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 from .state_space import (FirePhase, SituationState, ResourceUnit,
                           ResourceSpace, AdaptationResult, AdaptationMode)
-from .rl_agent import QLearningAgent, RLState, compute_reward, ACTION_NAMES
+from .rl_agent import (QLearningAgent, RLState, compute_reward,
+                       ACTION_NAMES, ACTION_SPACE, ActionLevel,
+                       get_action_mask, _CODE_TO_IDX)
 from .metrics import compute_risk_score, compute_delta_s, adaptation_trigger
 
 
@@ -23,13 +25,15 @@ class OperationalPlan:
     tactics: Dict[str, str]       # unit_id -> tactic
     reserve_requested: int = 0
     priority: str = "NORMAL"
+    action_code: str = "O4"       # code of the RL action that generated this plan
+    action_level: str = "operational"
 
 
 class L3OperationalHQ:
     """L3 operational HQ with RL-based adaptive resource allocation.
 
-    The RL agent (QLearningAgent) learns the optimal resource allocation
-    policy over repeated simulation episodes.
+    The RL agent learns the optimal resource allocation policy over
+    repeated simulation episodes.
     Autonomy alpha3 in [0.5, 0.8]: significant autonomous decision capability.
     """
 
@@ -40,17 +44,21 @@ class L3OperationalHQ:
         self._current_plan: Optional[OperationalPlan] = None
         self._L7_target = 0.90
         self._last_rl_state: Optional[RLState] = None
-        self._last_action: int = 0
+        self._last_action: int = _CODE_TO_IDX["O4"]   # default: recon
         self.plan_history: List[OperationalPlan] = []
         self._regroup_start: Optional[float] = None
         self._regroup_latency: float = 0.0
         self._cumulative_reward: float = 0.0
         self._step_count: int = 0
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _make_rl_state(self, situation: SituationState,
                        resources: ResourceSpace, L7: float) -> RLState:
-        total = max(len(resources.vehicles), 1)
-        avail = len(resources.available_units)
+        total    = max(len(resources.vehicles), 1)
+        avail    = len(resources.available_units)
         area_norm = min(1.0, situation.fire_area_m2 / 10000.0)
         return RLState.from_metrics(
             phase_idx=situation.phase.value,
@@ -59,10 +67,29 @@ class L3OperationalHQ:
             L7=L7,
         )
 
+    def _build_mask(self, situation: SituationState,
+                    resources: ResourceSpace) -> np.ndarray:
+        """Build action mask from current situation."""
+        total = max(len(resources.vehicles), 1)
+        avail = len(resources.available_units)
+        res_level = 0 if avail / total < 0.4 else (1 if avail / total < 0.7 else 2)
+        has_people = situation.casualties > 0
+        # Foam available if resource level is not empty
+        has_foam = res_level >= 1
+        return get_action_mask(
+            phase_idx=situation.phase.value,
+            resource_level=res_level,
+            has_people=has_people,
+            has_foam=has_foam,
+        )
+
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
     def f_COP(self, cop_from_l1, reports_from_l2: List[dict]) -> SituationState:
         """Maintain common operating picture from L1 + L2 reports."""
         situation = cop_from_l1.situation
-        # Merge L2 reports (e.g. additional fire observations)
         if reports_from_l2:
             areas = [r.get("fire_area_m2", 0.0) for r in reports_from_l2]
             if areas:
@@ -72,14 +99,16 @@ class L3OperationalHQ:
     def f_allocate(self, situation: SituationState, resources: ResourceSpace,
                    L7: float, L1: float, t: float,
                    training: bool = True) -> Tuple[int, AdaptationResult]:
-        """RL-based allocation decision.
+        """RL-based allocation decision with action masking.
 
-        Returns (action_index, AdaptationResult with delta_pi).
+        Returns (action_index 0..14, AdaptationResult with delta_pi).
         """
         rl_state = self._make_rl_state(situation, resources, L7)
-        action = self.rl_agent.select_action(rl_state, training=training)
+        mask     = self._build_mask(situation, resources)
+        action   = self.rl_agent.select_action(rl_state, training=training,
+                                               mask=mask)
 
-        # RL update if we have a previous state
+        # Q-learning update from previous step
         if self._last_rl_state is not None:
             reward = compute_reward(
                 L1_norm=min(1.0, L1 / 60.0),
@@ -88,78 +117,160 @@ class L3OperationalHQ:
                 L7=L7,
             )
             done = (situation.phase == FirePhase.RESOLVED)
-            td = self.rl_agent.update(
+            self.rl_agent.update(
                 self._last_rl_state, self._last_action,
                 reward, rl_state, done)
             self._cumulative_reward += reward
 
         self._last_rl_state = rl_state
-        self._last_action = action
-        self._step_count += 1
+        self._last_action   = action
+        self._step_count   += 1
 
-        # Map action to operational response
-        action_name = ACTION_NAMES[action]
-        result = self._action_to_delta_pi(action_name, situation, resources, t)
+        result = self._action_to_delta_pi(action, situation, resources, t)
         return action, result
 
-    def _action_to_delta_pi(self, action_name: str, situation: SituationState,
+    def _action_to_delta_pi(self, action_idx: int, situation: SituationState,
                             resources: ResourceSpace, t: float) -> AdaptationResult:
-        """Convert RL action to concrete operational plan delta_pi."""
-        avail = resources.available_units
+        """Convert RL action index to concrete operational plan delta_pi."""
+        rt = ACTION_SPACE[action_idx]
+        avail  = resources.available_units
         active = resources.active_units
+        code   = rt.code
 
-        if action_name == "HOLD":
-            return AdaptationResult(mode=AdaptationMode.NORMAL,
-                                    actions=["Продолжить текущую расстановку"],
-                                    priority_level="NORMAL")
+        # ── Strategic ─────────────────────────────────────────────────────
+        if code == "S1":
+            return AdaptationResult(
+                mode=AdaptationMode.MOBILIZATION,
+                actions=["Приоритет — спасение людей",
+                         "Направить АСА и АЛ к очагу угрозы",
+                         "Запросить скорую помощь"],
+                priority_level="URGENT")
 
-        if action_name == "REGROUP":
+        if code == "S2":
+            return AdaptationResult(
+                mode=AdaptationMode.TACTICAL,
+                actions=["Защита соседних объектов",
+                         f"Выставить {max(1, len(active)//3)} ствола на периметр"],
+                priority_level="WARNING")
+
+        if code == "S3":
+            return AdaptationResult(
+                mode=AdaptationMode.OPERATIONAL,
+                actions=["Локализация — ограничение площади горения",
+                         "Охватить периметр рукавными линиями"],
+                priority_level="WARNING")
+
+        if code == "S4":
+            n_trunks = max(1, len(avail))
+            return AdaptationResult(
+                mode=AdaptationMode.OPERATIONAL,
+                actions=[f"Ликвидация: ввести {n_trunks} ствол(а) на решающем направлении",
+                         "Максимальная интенсивность подачи ОВ"],
+                priority_level="URGENT")
+
+        if code == "S5":
+            return AdaptationResult(
+                mode=AdaptationMode.MOBILIZATION,
+                actions=["Предотвращение вскипания/выброса",
+                         "Охлаждение стенок резервуара",
+                         "Готовность к экстренному отходу"],
+                resources_requested=0,
+                priority_level="CRITICAL")
+
+        # ── Tactical ──────────────────────────────────────────────────────
+        if code == "T1":
             self._regroup_start = t
-            acts = [f"Перегруппировать {len(active)} ед. по секторам",
-                    "Оптимизировать подачу стволов"]
-            return AdaptationResult(mode=AdaptationMode.TACTICAL,
-                                    actions=acts, priority_level="ADVISORY",
-                                    resources_requested=0)
+            return AdaptationResult(
+                mode=AdaptationMode.TACTICAL,
+                actions=["Создать участок тушения",
+                         f"Назначить НУТ, распределить {len(avail)} ед."],
+                priority_level="ADVISORY")
 
-        if action_name == "REQUEST_RESERVES":
+        if code == "T2":
+            self._regroup_start = t
+            return AdaptationResult(
+                mode=AdaptationMode.TACTICAL,
+                actions=[f"Перераспределить {len(active)} ед. по секторам",
+                         "Оптимизировать позиции стволов"],
+                priority_level="ADVISORY")
+
+        if code == "T3":
             n_req = max(1, len(active) // 2)
-            return AdaptationResult(mode=AdaptationMode.OPERATIONAL,
-                                    actions=[f"Запрос {n_req} ед. резерва от L4",
-                                             "Подготовить позиции для входа"],
-                                    resources_requested=n_req,
-                                    priority_level="WARNING")
+            return AdaptationResult(
+                mode=AdaptationMode.MOBILIZATION,
+                actions=[f"Вызов подкрепления: {n_req} ед. от Л4",
+                         "Повысить ранг пожара",
+                         "Запрос специальной техники"],
+                resources_requested=n_req,
+                priority_level="WARNING")
 
-        if action_name == "FULL_MOBILIZE":
-            return AdaptationResult(mode=AdaptationMode.MOBILIZATION,
-                                    actions=["Полная мобилизация гарнизона",
-                                             "Объявить повышенный номер вызова",
-                                             "Запрос межгарнизонного взаимодействия"],
-                                    resources_requested=999,
-                                    priority_level="URGENT")
+        if code == "T4":
+            return AdaptationResult(
+                mode=AdaptationMode.NORMAL,
+                actions=["Изменить схему развёртывания НРС",
+                         "Скорректировать способ подачи ОВ"],
+                priority_level="INFO")
 
-        if action_name == "SCALE_DOWN":
-            return AdaptationResult(mode=AdaptationMode.NORMAL,
-                                    actions=["Вывод части сил",
-                                             "Перевод на дотушивание"],
-                                    priority_level="INFO")
+        # ── Operational ───────────────────────────────────────────────────
+        if code == "O1":
+            return AdaptationResult(
+                mode=AdaptationMode.OPERATIONAL,
+                actions=["Подать ствол на позицию",
+                         "Установить ПА на водоисточник"],
+                priority_level="NORMAL")
 
+        if code == "O2":
+            return AdaptationResult(
+                mode=AdaptationMode.OPERATIONAL,
+                actions=["Охлаждение конструкций/резервуаров",
+                         "Поддерживать расход 3-5 л/с на ствол"],
+                priority_level="NORMAL")
+
+        if code == "O3":
+            return AdaptationResult(
+                mode=AdaptationMode.OPERATIONAL,
+                actions=["Пенная атака на резервуар",
+                         "Подать ГПС-600 по периметру"],
+                priority_level="URGENT")
+
+        if code == "O4":
+            return AdaptationResult(
+                mode=AdaptationMode.NORMAL,
+                actions=["Разведка: определить границы зоны горения",
+                         "Установить наличие людей и угрозу распространения"],
+                priority_level="INFO")
+
+        if code == "O5":
+            return AdaptationResult(
+                mode=AdaptationMode.MOBILIZATION,
+                actions=["Эвакуация: провести по безопасному маршруту",
+                         "АЛ-30 к точкам спасения"],
+                priority_level="URGENT")
+
+        if code == "O6":
+            return AdaptationResult(
+                mode=AdaptationMode.DEGRADED,
+                actions=["Сигнал отхода — немедленный вывод личного состава",
+                         "Определить зону безопасного отхода"],
+                priority_level="CRITICAL")
+
+        # fallback
         return AdaptationResult(mode=AdaptationMode.NORMAL, actions=[])
 
     def f_predict(self, situation: SituationState, t: float) -> dict:
-        """Fire spread forecast (linear extrapolation)."""
-        dt = 15.0  # 15-minute horizon
-        spread = situation.fire_spread_rate  # m/min
-        current_area = situation.fire_area_m2
-        predicted_area = current_area + spread * dt * 0.5
+        """Fire spread forecast (linear extrapolation, 15-min horizon)."""
+        dt      = 15.0
+        spread  = situation.fire_spread_rate
+        current = situation.fire_area_m2
         return {
-            "t_horizon_min": dt,
-            "predicted_area_m2": predicted_area,
-            "delta_area_m2": predicted_area - current_area,
+            "t_horizon_min":   dt,
+            "predicted_area_m2": current + spread * dt * 0.5,
+            "delta_area_m2":   spread * dt * 0.5,
         }
 
     def finish_episode(self) -> None:
-        """Call at end of simulation episode to decay epsilon."""
+        """Call at end of episode to decay epsilon and log reward."""
         self.rl_agent.decay_epsilon()
         self.rl_agent.episode_rewards.append(self._cumulative_reward)
         self._cumulative_reward = 0.0
-        self._last_rl_state = None
+        self._last_rl_state     = None
