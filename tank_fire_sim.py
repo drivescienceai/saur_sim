@@ -292,7 +292,13 @@ ACTIONS_BY_PHASE = {
 # Q-LEARNING АГЕНТ (автономный)
 # ══════════════════════════════════════════════════════════════════════════════
 class QLAgent:
-    """Простой Q-learning агент для управления тушением пожара."""
+    """Q-обучение с дискретной таблицей Q[состояние, действие].
+
+    Пространство состояний кодируется в 128 индексов функцией state_to_idx()
+    по 7 признакам (фаза, стволы, ПНС, готовность пены, розлив, кол-во атак, БУ).
+    Пространство действий — 15 возможных решений РТП (см. ACTIONS).
+    Стратегия выбора действий: ε-жадная (epsilon-greedy), ε убывает по эпизодам.
+    """
 
     def __init__(self, n_states: int = 128, n_actions: int = N_ACT,
                  alpha: float = 0.15, gamma: float = 0.95,
@@ -308,20 +314,25 @@ class QLAgent:
         self.action_counts = np.zeros(n_actions, dtype=int)
 
     def state_to_idx(self, s: dict) -> int:
+        # Номер фазы (S1..S5 → 0..4) — ключевой признак смены тактики
         ph  = {"S1": 0,"S2": 1,"S3": 2,"S4": 3,"S5": 4}.get(s.get("phase","S1"), 0)
+        # Число стволов квантуется попарно (0–1→0, 2–3→1, 4–5→2, 6+→3)
         tr  = min(3, s.get("n_trunks", 0) // 2)          # 0–3
         pns = min(3, s.get("n_pns", 0))                   # 0–3
         fr  = int(s.get("foam_ready", False))              # 0–1
         sp  = int(s.get("spill", False))                   # 0–1
         fa  = min(3, s.get("foam_attacks", 0))             # 0–3
         bu  = min(3, s.get("n_bu", 0))                     # 0–3
+        # Хэш-свёртка в 128 ячеек таблицы Q (возможны коллизии — допустимо для обучения)
         return int((ph*64 + tr*16 + pns*4 + fr*2 + sp + fa*8 + bu*2) % 128)
 
     def select_action(self, s: dict, mask: Optional[np.ndarray] = None,
                       training: bool = True) -> int:
+        # С вероятностью ε — случайное исследование среди допустимых действий
         if training and self.rng.random() < self.epsilon:
             valid = np.where(mask)[0] if mask is not None else np.arange(self.n_actions)
             return int(self.rng.choice(valid)) if len(valid) > 0 else 0
+        # Иначе — жадный выбор: действие с максимальным Q, недопустимые занижены до -∞
         q = self.Q[self.state_to_idx(s)].copy()
         if mask is not None:
             q[~mask] = -1e9
@@ -329,7 +340,9 @@ class QLAgent:
 
     def update(self, s: dict, a: int, r: float, s_next: dict, done: bool):
         i, j = self.state_to_idx(s), self.state_to_idx(s_next)
+        # Цель TD: r + γ·max_a'Q(s',a'), при завершении эпизода — только r
         td = r + (0.0 if done else self.gamma * np.max(self.Q[j]))
+        # Обновление Q по правилу: Q(s,a) ← Q(s,a) + α·(td_цель − Q(s,a))
         self.Q[i, a] += self.alpha * (td - self.Q[i, a])
         self._ep_reward += r
         self.action_counts[a] += 1
@@ -371,7 +384,13 @@ class SimSnapshot:
 
 
 class TankFireSim:
-    """Дискретно-событийная симуляция тушения пожара РВС."""
+    """Дискретно-событийная симуляция тушения пожара РВС.
+
+    На каждом шаге (dt мин): воспроизводятся скриптованные события из хронологии,
+    обновляется физика пожара, определяется фаза, RL-агент выбирает и применяет
+    действие. Поддерживает два сценария: «tuapse» (РВС №9, ранг №4) и «serp»
+    (РВС №20, ранг №2). Нормативные данные берутся из модуля norms_gost.
+    """
 
     def __init__(self, seed: int = 42, training: bool = True,
                  scenario: str = "tuapse"):
@@ -392,17 +411,17 @@ class TankFireSim:
         self.n_trunks_burn  = 0
         self.n_trunks_nbr   = 0
         self.n_pns          = 0          # ПНС на водоисточниках
-        self.n_bu           = 0
-        self.has_shtab      = False
-        self.foam_attacks   = 0
-        self.foam_ready     = False
+        self.n_bu           = 0          # число боевых участков (макс. 3)
+        self.has_shtab      = False      # создан оперативный штаб
+        self.foam_attacks   = 0          # счётчик выполненных пенных атак
+        self.foam_ready     = False      # флаг: все условия для атаки выполнены
         self.foam_conc      = 12.0       # запас пенообразователя (т)
-        self.spill          = False
+        self.spill          = False      # активный розлив горящего топлива
         self.spill_area     = 0.0
-        self.secondary_fire = False
-        self.localized      = False
-        self.extinguished   = False
-        self.water_flow     = 0.0
+        self.secondary_fire = False      # вторичный очаг (столовая / лаборатория)
+        self.localized      = False      # пожар локализован (площадь не растёт)
+        self.extinguished   = False      # видимое горение ликвидировано
+        self.water_flow     = 0.0        # суммарный расход ОВ, л/с
         self.last_action    = 12         # O4: разведка по умолчанию
 
         # Физика пенной атаки (нормы ГОСТ Р 51043-2002 / Справочник РТП)
@@ -426,6 +445,8 @@ class TankFireSim:
 
     # ── Состояние для агента ───────────────────────────────────────────────────
     def _state(self) -> dict:
+        # Вектор признаков, который агент передаёт в state_to_idx() и затем в Q-таблицу.
+        # roof_low=True означает, что каркас крыши уже не блокирует пенную атаку (< 40%)
         return dict(
             phase=self.phase,
             n_trunks=self.n_trunks_burn,
@@ -438,6 +459,7 @@ class TankFireSim:
         )
 
     def _mask(self) -> np.ndarray:
+        # Базовое ограничение — только действия, допустимые для текущей фазы
         m = np.zeros(N_ACT, dtype=bool)
         valid = PHASE_VALID.get(self.phase, list(range(N_ACT)))
         for i in valid:
@@ -449,16 +471,19 @@ class TankFireSim:
             m[13] = False           # O5 — только при розливе
         if not self.secondary_fire:
             m[0] = False            # S1 — только при угрозе людям
-        m[14] = self._risk() > 0.85 # O6 — отход только при критическом риске
+        # Сигнал отхода (O6) разрешён лишь при действительно критическом риске
+        m[14] = self._risk() > 0.85
         if not m.any():
             m[12] = True            # запасной: разведка
         return m
 
     def _risk(self) -> float:
+        # Базовый риск зависит от фазы: S3 (активное горение) — наиболее опасна
         base = {"S1":0.25,"S2":0.4,"S3":0.65,"S4":0.5,"S5":0.2}.get(self.phase,0.3)
-        if self.spill:          base += 0.20
+        if self.spill:          base += 0.20   # розлив резко увеличивает угрозу
         if self.secondary_fire: base += 0.10
-        if self.foam_attacks >= 3 and not self.localized: base += 0.10
+        if self.foam_attacks >= 3 and not self.localized: base += 0.10  # многократные неудачи
+        # Вклад площади пожара: при 6000 м² максимальная надбавка +0.25
         area_f = min(0.25, self.fire_area / 6000)
         return min(1.0, base + area_f)
 
@@ -481,12 +506,13 @@ class TankFireSim:
                 r = 0.3
                 self._log(P["info"], f"O2: охлаждение РВС №17 — {self.n_trunks_nbr} ствола")
 
-        elif code in ("O3","S4"):  # Пенная атака
+        elif code in ("O3","S4"):  # Пенная атака: проверяем выполнимость по нормам ГОСТ
             if self.foam_ready and self.foam_conc > 0:
                 self.foam_attacks += 1
-                self.foam_conc -= 1.8
+                self.foam_conc -= 1.8   # расход пенообразователя на одну атаку, т
                 q_foam = self._compute_foam_flow()
                 self.foam_flow_ls = q_foam
+                # Нормативная проверка: Q_эфф ≥ Q_треб с учётом препятствия крыши
                 result = foam_attack_feasibility(
                     self.fire_area, q_foam, self.roof_obstruction,
                     self._cfg["fuel"]
@@ -537,7 +563,7 @@ class TankFireSim:
             r = 0.4
             self._log(P["warn"], "T3: запрос доп. С и С — ПНС, ПАНРК, пожарный поезд")
 
-        elif code == "T4":  # Наладить водоснабжение
+        elif code == "T4":  # Наладить водоснабжение: каждый ПНС-110 добавляет ~110 л/с
             if self.n_pns < 4:
                 self.n_pns += 1
                 self.water_flow += 110.0
@@ -563,14 +589,14 @@ class TankFireSim:
             r = 0.6
             self._log(P["warn"], "S5: РН — предотвращение вскипания; максимальное охлаждение стенок")
 
-        # Обновить готовность к пенной атаке
+        # Пенная атака возможна только при наличии пенообразователя, воды и стволов охлаждения
         self.foam_ready = (
             self.foam_conc > 0
             and self.n_pns >= 1
             and self.n_trunks_burn >= 3
         )
 
-        # Постоянный штраф за площадь пожара
+        # Постоянный штраф: чем больше площадь пожара, тем ниже каждое вознаграждение
         r -= 0.005 * self.fire_area / 1000
         return r
 
@@ -727,28 +753,29 @@ class TankFireSim:
             return
         area0 = self._cfg["initial_fire_area"]
         if self.localized:
-            # Медленное уменьшение при локализации
+            # При локализации площадь медленно убывает; нижняя граница — 50% или 800 м²
             min_area = area0 * 0.5 if self.scenario == "serp" else 800.0
             self.fire_area = max(min_area, self.fire_area - self.rng.uniform(0, 1))
         elif self.n_trunks_burn < 4:
-            # Рост при недостаточном охлаждении
+            # При нехватке стволов охлаждения пожар распространяется (до 2.5×начальной площади)
             max_area = area0 * 2.5
             self.fire_area = min(max_area, self.fire_area + self.rng.uniform(0, 3))
 
     def _update_phase(self):
+        # Фаза S5 наступает только после полного тушения (extinguished)
         if self.extinguished:
             self.phase = "S5"
         elif self.scenario == "serp":
-            # Серпухов: фазы по укороченной шкале времени
-            if   self.t >= 90:   self.phase = "S4"
-            elif self.t >= 20:   self.phase = "S3"
-            elif self.t >= 14:   self.phase = "S2"
+            # Серпухов: пороги по реальной хронологии ПТП (мин от начала)
+            if   self.t >= 90:   self.phase = "S4"   # локализация → пенная атака
+            elif self.t >= 20:   self.phase = "S3"   # активное горение
+            elif self.t >= 14:   self.phase = "S2"   # прибытие первых подразделений
             else:                self.phase = "S1"
         else:
-            # Туапсе: фазы по оригинальной шкале
-            if   self.t >= 4740: self.phase = "S4"
-            elif self.t >= 160:  self.phase = "S3"
-            elif self.t >= 10:   self.phase = "S2"
+            # Туапсе: пороги по реальной хронологии 14–17.03.2025
+            if   self.t >= 4740: self.phase = "S4"   # 6-я пенная атака с АКП-50
+            elif self.t >= 160:  self.phase = "S3"   # смена РТП-2, активное горение
+            elif self.t >= 10:   self.phase = "S2"   # первые подразделения прибыли
             else:                self.phase = "S1"
 
 
@@ -756,6 +783,13 @@ class TankFireSim:
 # ГРАФИЧЕСКИЙ ИНТЕРФЕЙС
 # ══════════════════════════════════════════════════════════════════════════════
 class TankFireApp(tk.Tk):
+    """Главное окно приложения: GUI-оболочка вокруг TankFireSim.
+
+    Компоновка: заголовок → горизонтальный PanedWindow (левая панель с картой
+    и статусом + правая с вкладками) → нижняя панель управления.
+    Анимационный цикл запускается через tk.after() с периодом TICK_MS мс;
+    за один тик выполняется _speed шагов симуляции по STEP_MIN мин каждый.
+    """
 
     SPEEDS = {"1×": 1, "5×": 5, "15×": 15, "60×": 60, "300×": 300}
     STEP_MIN = 5   # минут на шаг симуляции
@@ -784,7 +818,7 @@ class TankFireApp(tk.Tk):
     # UI CONSTRUCTION
     # ─────────────────────────────────────────────────────────────────────────
     def _build_ui(self):
-        # ── Заголовок ────────────────────────────────────────────────────────
+        # ── Заголовок: фиксированная полоса с названием сценария ─────────────
         hdr = tk.Frame(self, bg=P["panel"], height=52)
         hdr.pack(fill="x")
         hdr.pack_propagate(False)
@@ -794,7 +828,7 @@ class TankFireApp(tk.Tk):
         tk.Label(hdr, textvariable=self._hdr_var,
                  font=("Arial", 9), bg=P["panel"], fg=P["text2"]).pack(side="left")
 
-        # ── Главная панель ────────────────────────────────────────────────────
+        # ── Главная панель: карта слева, вкладки справа ───────────────────────
         paned = tk.PanedWindow(self, orient="horizontal", bg=P["bg"],
                                sashwidth=5, sashrelief="flat")
         paned.pack(fill="both", expand=True, padx=4, pady=4)
@@ -806,7 +840,7 @@ class TankFireApp(tk.Tk):
         paned.paneconfig(left,  width=MAP_W + 20)
         paned.paneconfig(right, width=640)
 
-        # ── Панель управления ─────────────────────────────────────────────────
+        # ── Нижняя панель управления: Play/Pause/Reset, скорость, прогресс ───
         self._build_controls()
 
     # ── Левая панель: карта + статус ─────────────────────────────────────────
@@ -889,10 +923,15 @@ class TankFireApp(tk.Tk):
         nb.add(t4, text="📖  Справочник действий")
         self._build_reference_tab(t4)
 
-        # Tab 5 — Настройки
+        # Tab 5 — Отчёт / Экспорт
         t5 = tk.Frame(nb, bg=P["bg"])
-        nb.add(t5, text="⚙️  Настройки")
-        self._build_settings_tab(t5)
+        nb.add(t5, text="📄  Отчёт / Экспорт")
+        self._build_report_tab(t5)
+
+        # Tab 6 — Настройки
+        t6 = tk.Frame(nb, bg=P["bg"])
+        nb.add(t6, text="⚙️  Настройки")
+        self._build_settings_tab(t6)
 
         self._nb = nb
         return frm
@@ -1036,7 +1075,12 @@ class TankFireApp(tk.Tk):
 
     def _refresh_reference(self):
         ph  = self._ref_phase_var.get()
-        acts = ACTIONS_BY_PHASE.get(ph, [])
+        # Используем словарь действий текущего сценария (если задан), иначе глобальный
+        scen_cfg = SCENARIOS.get(getattr(self, "_scenario_key", "tuapse"), {})
+        scen_acts = scen_cfg.get("actions_by_phase")
+        if scen_acts is None:
+            scen_acts = ACTIONS_BY_PHASE
+        acts = scen_acts.get(ph, ACTIONS_BY_PHASE.get(ph, []))
         t = self._ref_text
         t.config(state="normal")
         t.delete("1.0","end")
@@ -1050,6 +1094,201 @@ class TankFireApp(tk.Tk):
             t.insert("end", f"{name}\n", color_tag)
             t.insert("end", f"         {hint}\n\n", "hint")
         t.config(state="disabled")
+
+    # ── Tab: Отчёт / Экспорт ─────────────────────────────────────────────────
+    def _build_report_tab(self, parent):
+        """Вкладка для генерации отчётов и экспорта данных по итогам симуляции."""
+        # Импорт модулей отчётности (отложенный, чтобы не замедлять запуск)
+        try:
+            from .report_generator import generate_pdf_report, export_for_article_json, export_for_article_docx
+            from .manual_generator import generate_manual
+        except ImportError:
+            from report_generator import generate_pdf_report, export_for_article_json, export_for_article_docx
+            from manual_generator import generate_manual
+
+        self._gen_pdf   = generate_pdf_report
+        self._gen_json  = export_for_article_json
+        self._gen_docx  = export_for_article_docx
+        self._gen_manual = generate_manual
+
+        # Заголовок
+        hdr = tk.Frame(parent, bg=P["panel2"])
+        hdr.pack(fill="x", padx=4, pady=(4, 0))
+        tk.Label(hdr, text="  📄  Отчёт по результатам моделирования",
+                 font=("Arial", 10, "bold"), bg=P["panel2"], fg=P["hi"]
+                 ).pack(side="left", padx=8, pady=6)
+
+        # Область содержимого с прокруткой
+        canvas = tk.Canvas(parent, bg=P["bg"], highlightthickness=0)
+        scrollbar = tk.Scrollbar(parent, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas, bg=P["bg"])
+        canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+
+        def section(title):
+            f = tk.LabelFrame(inner, text=f"  {title}  ", bg=P["panel"],
+                              fg=P["accent"], font=("Arial", 9, "bold"),
+                              bd=1, relief="groove")
+            f.pack(fill="x", padx=10, pady=6, ipadx=6, ipady=4)
+            return f
+
+        # ── Краткая сводка итогов симуляции ──────────────────────────────────
+        f_summary = section("Краткая сводка итогов симуляции")
+        self._report_summary_var = tk.StringVar(value="(запустите симуляцию и нажмите «Обновить сводку»)")
+        tk.Label(f_summary, textvariable=self._report_summary_var,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["text"],
+                 justify="left", wraplength=560).pack(anchor="w", padx=10, pady=4)
+
+        tk.Button(f_summary, text="🔄  Обновить сводку",
+                  command=self._refresh_report_summary,
+                  bg=P["info"], fg="#fff", font=("Arial", 9, "bold"),
+                  relief="flat", padx=10, pady=4).pack(anchor="w", padx=10, pady=(0, 4))
+
+        # ── PDF-отчёт ─────────────────────────────────────────────────────────
+        f_pdf = section("PDF-отчёт для оперативного штаба")
+        tk.Label(f_pdf,
+                 text=("Полный отчёт: титульный лист, нормативные требования, таблица результатов,\n"
+                       "графики динамики и RL-агента, хронология событий, выводы и рекомендации."),
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
+                 ).pack(anchor="w", padx=10, pady=(4, 2))
+        self._pdf_status = tk.StringVar(value="")
+        tk.Label(f_pdf, textvariable=self._pdf_status,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["success"]
+                 ).pack(anchor="w", padx=10)
+        tk.Button(f_pdf, text="📄  Сформировать PDF-отчёт",
+                  command=self._do_generate_pdf,
+                  bg=P["danger"], fg="#fff", font=("Arial", 9, "bold"),
+                  relief="flat", padx=12, pady=5).pack(anchor="w", padx=10, pady=4)
+
+        # ── JSON-выгрузка ─────────────────────────────────────────────────────
+        f_json = section("JSON-выгрузка для научной статьи")
+        tk.Label(f_json,
+                 text=("Структурированные данные: метаданные, параметры сценария, результаты,\n"
+                       "временны́е ряды, статистика RL-агента, нормативный анализ."),
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
+                 ).pack(anchor="w", padx=10, pady=(4, 2))
+        self._json_status = tk.StringVar(value="")
+        tk.Label(f_json, textvariable=self._json_status,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["success"]
+                 ).pack(anchor="w", padx=10)
+        tk.Button(f_json, text="📊  Экспортировать JSON",
+                  command=self._do_export_json,
+                  bg=P["info"], fg="#fff", font=("Arial", 9, "bold"),
+                  relief="flat", padx=12, pady=5).pack(anchor="w", padx=10, pady=4)
+
+        # ── DOCX-черновик ─────────────────────────────────────────────────────
+        f_docx = section("DOCX-черновик для написания статьи")
+        tk.Label(f_docx,
+                 text=("Документ Word с готовыми фрагментами текста для разделов статьи:\n"
+                       "«Объект и метод», «Результаты», «Обсуждение», подписи к рисункам."),
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
+                 ).pack(anchor="w", padx=10, pady=(4, 2))
+        self._docx_status = tk.StringVar(value="")
+        tk.Label(f_docx, textvariable=self._docx_status,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["success"]
+                 ).pack(anchor="w", padx=10)
+        tk.Button(f_docx, text="📝  Экспортировать DOCX",
+                  command=self._do_export_docx,
+                  bg=P["warn"], fg="#000", font=("Arial", 9, "bold"),
+                  relief="flat", padx=12, pady=5).pack(anchor="w", padx=10, pady=4)
+
+        # ── Мануал программы ─────────────────────────────────────────────────
+        f_manual = section("PDF-мануал программы")
+        tk.Label(f_manual,
+                 text=("Руководство пользователя: интерфейс, сценарии, действия РТП,\n"
+                       "Q-learning агент, физическая модель, нормативная база."),
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
+                 ).pack(anchor="w", padx=10, pady=(4, 2))
+        self._manual_status = tk.StringVar(value="")
+        tk.Label(f_manual, textvariable=self._manual_status,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["success"]
+                 ).pack(anchor="w", padx=10)
+        tk.Button(f_manual, text="📖  Создать мануал (PDF)",
+                  command=self._do_generate_manual,
+                  bg=P["success"], fg="#fff", font=("Arial", 9, "bold"),
+                  relief="flat", padx=12, pady=5).pack(anchor="w", padx=10, pady=4)
+
+    def _refresh_report_summary(self):
+        """Обновить краткую сводку итогов на вкладке «Отчёт»."""
+        sim = self.sim
+        outcome = ("✅ ЛИКВИДИРОВАН" if sim.extinguished else
+                   ("🔒 ЛОКАЛИЗОВАН" if sim.localized else "🔥 АКТИВНЫЙ"))
+        risk = sim._risk()
+        lines = [
+            f"Сценарий:         {sim._cfg['name'][:55]}",
+            f"Время симуляции:  {sim.t} мин ({self._fmt_time(sim.t)})",
+            f"Исход пожара:     {outcome}",
+            f"Фаза:             {sim.phase}  |  Площадь: {sim.fire_area:.0f} м²",
+            f"Пенных атак:      {sim.foam_attacks}  |  АКП-50: {'Да' if sim.akp50_available else 'Нет'}",
+            f"Расход ОВ:        {sim.water_flow:.0f} л/с  |  ПНС: {sim.n_pns}  |  БУ: {sim.n_bu}",
+            f"Индекс риска:     {risk:.3f}  ({('КРИТИЧЕСКИЙ' if risk>0.75 else 'ВЫСОКИЙ' if risk>0.5 else 'СРЕДНИЙ' if risk>0.25 else 'НИЗКИЙ')})",
+            f"RL ε:             {sim.agent.epsilon:.3f}  |  Шагов: {len(sim.h_reward)}  |  Σ reward: {sum(sim.h_reward):.1f}",
+        ]
+        self._report_summary_var.set("\n".join(lines))
+
+    def _do_generate_pdf(self):
+        """Запустить генерацию PDF-отчёта в отдельном потоке."""
+        import threading
+        self._pdf_status.set("⏳ Генерация PDF…")
+        self.update_idletasks()
+
+        def _run():
+            try:
+                path = self._gen_pdf(self.sim)
+                self._pdf_status.set(f"✅ Сохранён: {os.path.basename(path)}")
+            except Exception as exc:
+                self._pdf_status.set(f"❌ Ошибка: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _do_export_json(self):
+        """Экспортировать данные в JSON для научной статьи."""
+        import threading
+        self._json_status.set("⏳ Экспорт JSON…")
+        self.update_idletasks()
+
+        def _run():
+            try:
+                path = self._gen_json(self.sim)
+                self._json_status.set(f"✅ Сохранён: {os.path.basename(path)}")
+            except Exception as exc:
+                self._json_status.set(f"❌ Ошибка: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _do_export_docx(self):
+        """Экспортировать DOCX-черновик для написания статьи."""
+        import threading
+        self._docx_status.set("⏳ Экспорт DOCX…")
+        self.update_idletasks()
+
+        def _run():
+            try:
+                path = self._gen_docx(self.sim)
+                self._docx_status.set(f"✅ Сохранён: {os.path.basename(path)}")
+            except Exception as exc:
+                self._docx_status.set(f"❌ Ошибка: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _do_generate_manual(self):
+        """Создать PDF-мануал программы."""
+        import threading
+        self._manual_status.set("⏳ Создание мануала…")
+        self.update_idletasks()
+
+        def _run():
+            try:
+                path = self._gen_manual()
+                self._manual_status.set(f"✅ Сохранён: {os.path.basename(path)}")
+            except Exception as exc:
+                self._manual_status.set(f"❌ Ошибка: {exc}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ── Tab: Настройки ────────────────────────────────────────────────────────
     def _build_settings_tab(self, parent):
@@ -1308,21 +1547,22 @@ class TankFireApp(tk.Tk):
 
         # ── РВС №9 (горящий, по центру) ──────────────────────────────────────
         cx9, cy9, r9 = 265, 230, 65
+        # Интенсивность [0..1]: нормирована по условной максимальной площади 2000 м²
         fire_intensity = min(1.0, sim.fire_area / 2000) if not sim.extinguished else 0.0
 
         if fire_intensity > 0:
-            # Дым (внешний ореол)
+            # Дым (внешний ореол): три концентрических пунктирных кольца
             smoke_r = r9 + 20 + int(10 * fire_intensity)
             smoke_alpha = int(80 + 40 * fire_intensity)
             for i in range(3):
                 sr = smoke_r + i*8
                 c.create_oval(cx9-sr, cy9-sr, cx9+sr, cy9+sr,
                               outline=P["smoke"], width=1, dash=(2,6))
-            # Тело пожара
+            # Тело пожара меняет цвет с оранжевого на ярко-красный при высокой интенсивности
             fire_color = P["fire"] if fire_intensity > 0.7 else P["fire2"]
             c.create_oval(cx9-r9, cy9-r9, cx9+r9, cy9+r9,
                           fill=fire_color, outline="#ff0000", width=3)
-            # Пульсирующее пламя
+            # Пульсирующее пламя: 8 «языков» вращаются и колышутся по синусоиде
             pulse = 3 * math.sin(self._anim_t * 0.4)
             for angle_deg in range(0, 360, 45):
                 angle = math.radians(angle_deg + self._anim_t * 3)
@@ -1472,7 +1712,7 @@ class TankFireApp(tk.Tk):
         if not sim.h_fire:
             return
 
-        # ── Метрики ───────────────────────────────────────────────────────────
+        # ── Метрики: извлечь временны́е ряды из истории симуляции ────────────
         ts_f  = [x[0] for x in sim.h_fire]
         val_f = [x[1] for x in sim.h_fire]
         ts_w  = [x[0] for x in sim.h_water]
@@ -1543,7 +1783,7 @@ class TankFireApp(tk.Tk):
 
         self._fc_metrics.draw()
 
-        # ── RL-агент ──────────────────────────────────────────────────────────
+        # ── RL-агент: Q-значения, частота действий, кривая наград ────────────
         for ax in [self._ax_qval, self._ax_actcnt, self._ax_reward]:
             ax.cla()
             ax.set_facecolor(P["canvas"])
@@ -1552,13 +1792,13 @@ class TankFireApp(tk.Tk):
                 spine.set_color(P["grid"])
             ax.grid(True, color=P["grid"], linewidth=0.4, alpha=0.7)
 
-        # Q-значения текущего состояния
+        # Q-значения текущего состояния: высота столбца = ценность действия по Q-таблице
         ax = self._ax_qval
         qv   = sim.agent.q_values(sim._state())
         codes = [a[0] for a in ACTIONS]
         cols  = [LEVEL_C[a[1]] for a in ACTIONS]
         bars = ax.bar(range(N_ACT), qv, color=cols, alpha=0.85, width=0.7)
-        # Выделить текущее действие
+        # Выделить текущее выбранное действие золотой рамкой
         bars[sim.last_action].set_edgecolor(P["hi"])
         bars[sim.last_action].set_linewidth(2)
         ax.set_xticks(range(N_ACT))
@@ -1582,13 +1822,13 @@ class TankFireApp(tk.Tk):
         ax.set_xticklabels(codes, rotation=45, ha="right", fontsize=7, color=P["text2"])
         ax.set_title("Частота выбора действий", color=P["text"], fontsize=8, pad=3)
 
-        # Кривая наград
+        # Кривая накопленных наград (последние 500 шагов) + скользящее среднее
         ax = self._ax_reward
         if sim.h_reward:
             rw = sim.h_reward[-500:]   # последние 500 шагов
             cumrew = np.cumsum(rw)
             ax.plot(cumrew, color=P["success"], linewidth=1)
-            # Скользящее среднее
+            # Скользящее среднее (окно 20) — сглаживает шум отдельных шагов
             if len(rw) > 20:
                 window = 20
                 ma = np.convolve(rw, np.ones(window)/window, mode="valid")
@@ -1605,6 +1845,7 @@ class TankFireApp(tk.Tk):
         sim = self.sim
         sv  = self._status_vars
 
+        # Основные оперативные показатели
         sv["sim_time"].set(self._fmt_time(sim.t))
         sv["phase"].set(PHASE_NAMES.get(sim.phase, sim.phase))
         sv["fire_area"].set(f"{sim.fire_area:.0f} м²")
@@ -1612,8 +1853,10 @@ class TankFireApp(tk.Tk):
         sv["trunks"].set(f"{sim.n_trunks_burn} (РВС№9)  +  {sim.n_trunks_nbr} (РВС№17)")
         sv["pns"].set(f"{sim.n_pns} из 4")
         sv["bu"].set(f"{sim.n_bu} из 3")
+        # Суффикс показывает итоговый статус: ✅ ликвидирован / 🔒 локализован / ⏳ готовность
         sv["foam"].set(f"{sim.foam_attacks}" + ("  ✅" if sim.extinguished else ("  🔒" if sim.localized else "  ⏳" if sim.foam_ready else "")))
 
+        # Индекс риска → текстовая метка уровня угрозы
         risk = sim._risk()
         risk_str = "КРИТИЧЕСКИЙ" if risk > 0.75 else \
                    "ВЫСОКИЙ"     if risk > 0.50 else \
@@ -1623,7 +1866,7 @@ class TankFireApp(tk.Tk):
         code, level, desc = ACTIONS[sim.last_action]
         sv["action"].set(f"[{code}] {desc[:30]}")
 
-        # Физика пенной атаки (ГОСТ Р 51043)
+        # Физика пенной атаки (ГОСТ Р 51043): текущий расход vs. нормативный минимум
         roof_pct = sim.roof_obstruction * 100
         akp_mark = " (АКП-50 ✅)" if sim.akp50_available else ""
         sv["roof_obs"].set(f"{roof_pct:.0f}%{akp_mark}")
@@ -1634,7 +1877,7 @@ class TankFireApp(tk.Tk):
         else:
             sv["foam_flow"].set(f"—  (норм.≥{q_req:.0f} л/с)")
 
-        # Прогресс
+        # Прогресс-бар: доля прошедшего модельного времени от общей длительности сценария
         total = sim._cfg["total_min"]
         self._prog_bar.config(maximum=total)
         pct = min(100, int(100 * sim.t / total))
@@ -1661,17 +1904,19 @@ class TankFireApp(tk.Tk):
     def _animate(self):
         if not self._running:
             return
+        # За один тик выполняем _speed шагов по STEP_MIN мин, имитируя ускорение
         for _ in range(self._speed):
             if self.sim.t >= self.sim._cfg["total_min"] or self.sim.extinguished:
                 self._on_pause()
                 break
             self._snap = self.sim.step(dt=self.STEP_MIN)
 
+        # _anim_t используется для анимации мерцания пламени (sin-пульсация)
         self._anim_t += 1
         self._draw_map()
         self._update_status()
 
-        # Обновлять графики каждые ~2 секунды
+        # Перерисовка графиков — дорогостоящая операция; делаем не каждый тик
         if self._anim_t % 25 == 0:
             self._update_charts()
 
