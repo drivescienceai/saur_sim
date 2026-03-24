@@ -1373,6 +1373,19 @@ class TankFireApp(tk.Tk):
                            font=("Arial", 9), activebackground=P["panel"],
                            activeforeground=P["hi"]).pack(anchor="w", padx=10, pady=2)
 
+        # ── Конструктор сценариев ─────────────────────────────────────────────
+        f_scen_ed = section("Конструктор пользовательских сценариев")
+        tk.Label(f_scen_ed,
+                 text=("Создайте свой сценарий пожара: разместите объекты на карте,\n"
+                       "задайте тип горючего, ранг, кровлю — и запустите симуляцию."),
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
+                 ).pack(anchor="w", padx=10, pady=(4, 2))
+        tk.Button(f_scen_ed, text="🗺  Открыть конструктор сценариев",
+                  command=self._open_scenario_editor,
+                  bg=P["accent"], fg="#000", font=("Arial", 10, "bold"),
+                  relief="flat", padx=14, pady=6
+                  ).pack(anchor="w", padx=10, pady=6)
+
         # Кнопки
         f_btn = section("Действия")
         btn_row = tk.Frame(f_btn, bg=P["panel"])
@@ -1398,6 +1411,27 @@ class TankFireApp(tk.Tk):
                   command=self._do_manual_action, bg=P["success"],
                   fg="#fff", font=("Arial", 9, "bold"),
                   relief="flat", padx=10, pady=4).pack(pady=4)
+
+    def _open_scenario_editor(self):
+        """Открыть конструктор сценариев пожара."""
+        try:
+            from .scenario_editor import ScenarioEditorApp
+        except ImportError:
+            from scenario_editor import ScenarioEditorApp
+        self._on_pause()
+        ScenarioEditorApp(self, on_launch=self._launch_custom_scenario)
+
+    def _launch_custom_scenario(self, cfg: dict):
+        """Загрузить и запустить пользовательский сценарий из конструктора."""
+        # Добавить пользовательский сценарий в реестр под ключом «custom»
+        SCENARIOS["custom"] = cfg
+        self._scenario_key = "custom"
+        self.sim = TankFireSim(seed=42, training=True, scenario="custom")
+        self._hdr_var.set(cfg["name"])
+        self._norms_label_var.set(self._get_norms_text())
+        self._draw_map()
+        self._update_charts()
+        self._update_status()
 
     def _get_norms_text(self) -> str:
         """Нормативные требования для текущего сценария."""
