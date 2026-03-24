@@ -24,6 +24,12 @@ from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 import matplotlib.gridspec as gridspec
 
+# Нормативные данные ГОСТ Р 51043-2002 / СП 155.13130.2014
+try:
+    from .norms_gost import foam_attack_feasibility, NOZZLE_DB, RVS_9 as _RVS9_PARAMS
+except ImportError:
+    from norms_gost import foam_attack_feasibility, NOZZLE_DB, RVS_9 as _RVS9_PARAMS
+
 # ══════════════════════════════════════════════════════════════════════════════
 # ЦВЕТОВАЯ ПАЛИТРА И КОНСТАНТЫ
 # ══════════════════════════════════════════════════════════════════════════════
@@ -269,6 +275,8 @@ class SimSnapshot:
     risk: float
     last_action: int
     reward: float
+    roof_obstruction: float = 0.70  # доля блокировки каркасом крыши [0..1]
+    foam_flow_ls: float = 0.0       # суммарный расход пены, л/с
 
 
 class TankFireSim:
@@ -302,6 +310,12 @@ class TankFireSim:
         self.water_flow     = 0.0
         self.last_action    = 12         # O4: разведка по умолчанию
 
+        # Физика пенной атаки (нормы ГОСТ Р 51043-2002)
+        # Плавающая крыша РВС №9 имеет каркас из ферм, блокирующий подачу пены
+        self.roof_obstruction = 0.70    # нач. препятствие: каркас крыши ≈70%
+        self.akp50_available  = False   # АКП-50 (коленчатый подъёмник) на сцене
+        self.foam_flow_ls     = 0.0     # суммарный расход пенного раствора, л/с
+
         # История для графиков
         self.h_fire:   List[Tuple[int,float]] = [(0, 1250.0)]
         self.h_water:  List[Tuple[int,float]] = [(0, 0.0)]
@@ -326,6 +340,7 @@ class TankFireSim:
             spill=self.spill,
             foam_attacks=self.foam_attacks,
             n_bu=self.n_bu,
+            roof_low=self.roof_obstruction < 0.40,   # True когда препятствие снижено
         )
 
     def _mask(self) -> np.ndarray:
@@ -376,18 +391,22 @@ class TankFireSim:
             if self.foam_ready and self.foam_conc > 0:
                 self.foam_attacks += 1
                 self.foam_conc -= 1.8
-                ok = self._foam_success()
+                q_foam = self._compute_foam_flow()
+                self.foam_flow_ls = q_foam
+                result = foam_attack_feasibility(
+                    self.fire_area, q_foam, self.roof_obstruction, "бензин"
+                )
+                ok = result["feasible"]
                 if ok:
                     self.extinguished = True
                     r = 12.0
-                    self._log(P["success"], f"⚡ ПЕННАЯ АТАКА №{self.foam_attacks}: УСПЕШНА — горение ликвидировано!")
+                    self._log(P["success"],
+                              f"⚡ ПЕННАЯ АТАКА №{self.foam_attacks}: УСПЕШНА — горение ликвидировано! "
+                              f"Q_эфф={result['q_effective']:.0f} л/с ≥ норм. {result['q_required']:.0f} л/с")
                 else:
                     r = -0.4
-                    reasons = ["каркас крыши блокирует подачу пены",
-                               "образование карманов + высокая интенсивность",
-                               "разрушение пены при подаче",
-                               "недостаточный суммарный расход пены"]
-                    self._log(P["danger"], f"❌ Атака №{self.foam_attacks} не дала результата: {self.rng.choice(reasons)}")
+                    self._log(P["danger"],
+                              f"❌ Атака №{self.foam_attacks} не дала результата: {result['reason']}")
                 self.foam_ready = False
             else:
                 r = -0.5
@@ -460,15 +479,23 @@ class TankFireSim:
         r -= 0.005 * self.fire_area / 1000
         return r
 
-    def _foam_success(self) -> bool:
-        """Вероятность успеха пенной атаки."""
-        p = 0.03
-        if self.water_flow > 500:     p += 0.08
-        if self.foam_attacks >= 5:    p += 0.35  # учёт опыта (реальный: 6-я атака)
-        if self.n_pns >= 3:           p += 0.15  # достаточно насосных станций
-        if self.n_trunks_burn >= 6:   p += 0.05  # хорошее охлаждение
-        # Случайная составляющая
-        return self.rng.random() < min(0.9, p)
+    def _compute_foam_flow(self) -> float:
+        """Суммарный расход пенного раствора для текущей атаки, л/с.
+
+        Модель оборудования (ГОСТ Р 51043-2002, данные по пожару РВС №9 Туапсе):
+          - Базовая атака: 2 × Акрон-Аполло (33.3 л/с × 2 = 66.6 л/с)
+          - Со 2-й атаки: + Муссон-125 (125 л/с)
+          - При наличии АКП-50: + 2×ГПС-1000 (16.7 л/с × 2) + Антенор-1500 (25 л/с)
+            → также снижает препятствие крыши до 0.20 (подача через люк)
+        """
+        q = 2.0 * NOZZLE_DB["Акрон-Аполло"].flow_ls   # 66.6 л/с
+        if self.foam_attacks >= 2:
+            q += NOZZLE_DB["Муссон-125"].flow_ls        # +125 л/с
+        if self.akp50_available:
+            q += 2.0 * NOZZLE_DB["ГПС-1000"].flow_ls   # +33.4 л/с (через люк)
+            q += NOZZLE_DB["Антенор-1500"].flow_ls      # +25 л/с
+            self.roof_obstruction = 0.20                # АКП снижает препятствие
+        return q
 
     def _log(self, color: str, text: str):
         self.events.append((self.t, color, text))
@@ -524,6 +551,8 @@ class TankFireSim:
             spill=self.spill, secondary_fire=self.secondary_fire,
             localized=self.localized, extinguished=self.extinguished,
             risk=self._risk(), last_action=a, reward=r,
+            roof_obstruction=self.roof_obstruction,
+            foam_flow_ls=self.foam_flow_ls,
         )
 
     def _apply_scripted(self, t: int, desc: str):
@@ -564,6 +593,15 @@ class TankFireSim:
         if "готовность к пенной" in lo:
             self.foam_ready = (self.foam_conc > 0 and self.n_pns >= 1)
             self.foam_conc  = max(self.foam_conc, 4.0)
+        # АКП-50 прибыл → снижает препятствие каркаса (ГПС-1000 подаётся через люк)
+        if "акп-50" in lo or "акп50" in lo:
+            self.akp50_available  = True
+            self.roof_obstruction = 0.20
+        # Атака №2+: добавляется Муссон-125 — обновить foam_flow_ls если атака активна
+        if "муссон" in lo and "пенная" in lo:
+            self.foam_flow_ls = max(self.foam_flow_ls,
+                                    NOZZLE_DB["Муссон-125"].flow_ls +
+                                    2.0 * NOZZLE_DB["Акрон-Аполло"].flow_ls)
 
     def _update_fire(self):
         if self.extinguished:
@@ -669,6 +707,8 @@ class TankFireApp(tk.Tk):
             ("Пенных атак",      "foam",       "0"),
             ("Риск",             "risk",       "НИЗКИЙ"),
             ("Действие RL",      "action",     "O4 — Разведка"),
+            ("Препятствие крыши","roof_obs",   "70% (каркас)"),
+            ("Расход пены",      "foam_flow",  "0 л/с"),
         ]
         for i, (lname, key, default) in enumerate(rows):
             r, c = divmod(i, 2)
@@ -1408,6 +1448,17 @@ class TankFireApp(tk.Tk):
 
         code, level, desc = ACTIONS[sim.last_action]
         sv["action"].set(f"[{code}] {desc[:30]}")
+
+        # Физика пенной атаки (ГОСТ Р 51043)
+        roof_pct = sim.roof_obstruction * 100
+        akp_mark = " (АКП-50 ✅)" if sim.akp50_available else ""
+        sv["roof_obs"].set(f"{roof_pct:.0f}%{akp_mark}")
+        q_foam = sim.foam_flow_ls
+        q_req  = _RVS9_PARAMS.foam_flow_required_ls()
+        if q_foam > 0:
+            sv["foam_flow"].set(f"{q_foam:.0f} л/с  (норм.≥{q_req:.0f})")
+        else:
+            sv["foam_flow"].set(f"—  (норм.≥{q_req:.0f} л/с)")
 
         # Прогресс
         pct = min(100, int(100 * sim.t / TOTAL_MIN))
