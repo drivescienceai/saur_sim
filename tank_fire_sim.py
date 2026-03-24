@@ -152,6 +152,97 @@ _TL_LOOKUP: Dict[int, List] = {}
 for _ev in TIMELINE:
     _TL_LOOKUP.setdefault(_ev[0], []).append(_ev)
 
+# ══════════════════════════════════════════════════════════════════════════════
+# СЦЕНАРИЙ 2 — НЕФТЕБАЗА ЗАО «РОС-ТРЕЙД», Г. СЕРПУХОВ
+# Вариант №2 ПТП: пожар РВС №20 (V=2000 м³, бензин). Ранг пожара №2.
+# Источник: ПТП ЗАО «Рос-Трейд», составил М.А. Пересыпкин (утв. 26.05.2015)
+# ══════════════════════════════════════════════════════════════════════════════
+TOTAL_MIN_SERP = 300   # Ч+300 мин — окончание работ
+
+TIMELINE_SERP: List[Tuple[int, str, str, str]] = [
+    (0,   "Ч+0",   "Загорание РВС №20 (V=2000 м³, бензин). S=168 м², S_обвал=3410 м²", P["danger"]),
+    (10,  "Ч+10",  "Обнаружение, вызов 01. Начало тушения силами ДПД с первичными средствами", P["warn"]),
+    (14,  "Ч+14",  "Прибытие ПЧ-6. РТП-1: разведка пожара. S=168 м². Q_тр=66 л/с. Развёртывание", P["info"]),
+    (16,  "Ч+16",  "Прибытие ПЧ-330. 2 стволов А (РС-70) → охлаждение. 1 ГПС-600 → тушение. Q_ф=40 л/с", P["info"]),
+    (18,  "Ч+18",  "4 стволов А (РС-70) + 4 ГПС-600. Прибытие ПЧ-304. АЦ установить на пожарные гидранты (ПГ-106, ПГ-108). Готовность к пенной атаке", P["warn"]),
+    (20,  "Ч+20",  "Начало тушения ПЧ-304: 6 ГПС-600 введены на тушение и охлаждение обвалования", P["info"]),
+    (32,  "Ч+32",  "Прибытие ПЧ-52. Всего 6 стволов А + 3 ГПС-600 на позициях. Расход воды обеспечен", P["info"]),
+    (40,  "Ч+40",  "Создан оперативный штаб тушения пожара. ОП-2 ПЧ-3, ПЧ-2, СЧ-17. 9 ГПС-600 + 3 ствола А", P["info"]),
+    (60,  "Ч+60",  "Прибытие резервных АЦ. 7 стволов А + 3 ГПС-600 на охлаждение. Контроль обстановки", P["info"]),
+    (90,  "Ч+90",  "🔒 Пожар локализован на площади 168 м²", P["success"]),
+    (240, "Ч+240", "✅ Ликвидировано горение в РВС №20. 2 ствола А на охлаждение и контроль", P["success"]),
+    (300, "Ч+300", "🏁 Пожар ликвидирован. Охлаждение резервуаров ≥ 6 ч. ПЧ-6 — дежурство", P["success"]),
+]
+_TL_SERP_LOOKUP: Dict[int, List] = {}
+for _ev in TIMELINE_SERP:
+    _TL_SERP_LOOKUP.setdefault(_ev[0], []).append(_ev)
+
+# Справочник действий РТП — сценарий Серпухов
+ACTIONS_BY_PHASE_SERP = {
+    "S1": [
+        ("O4", "Разведка пожара",        "Установить тип РВС, объём, продукт, S зеркала. Вызвать ДПД"),
+        ("S3", "Подтвердить ранг пожара", "Ранг №2 по расписанию выезда (РВС V=1000–2000 м³)"),
+        ("T3", "Вызов по расписанию",     "АЦ-2, АЛ-1 ПЧ-6; дополнительно — ПЧ-330, ПЧ-304"),
+        ("S1", "Уведомить ЕДДС и главу МО", "Направить скорую, ДПС; охрана отключает электроснабжение"),
+    ],
+    "S2": [
+        ("O1", "Охлаждение РВС №20 (горящего)",   "2–4 ствола А (РС-70) по периметру РВС с наветренной стороны"),
+        ("O2", "Охлаждение соседних РВС",           "Стволы А на РВС в зоне теплового воздействия"),
+        ("T4", "Установка АЦ на ПГ",                "АЦ-1 → ПГ-106; АЦ-2 → ПГ-108; Q_ПГ ≈ 15 л/с каждый"),
+        ("T1", "Создать БУ по секторам",             "БУ-1 (тушение РВС №20), БУ-2 (охлаждение смежных)"),
+    ],
+    "S3": [
+        ("T4", "Установка ПА на водоисточники",      "Все АЦ на ПГ; при нехватке — водоём 500 м³ (сухотруб)"),
+        ("O1", "Наращивание стволов до 7–9",          "6–9 ГПС-600 на тушение + 7 стволов А на охлаждение"),
+        ("T3", "Запросить дополнительные СиС",        "ОП-2 ПЧ-3, ПЧ-2, СЧ-17. Обеспечить запас пенообразователя"),
+        ("T1", "Создать оперативный штаб",            "НШ, НТ, НБУ-1,2; расчёт: N_ГПС=3, N_ств_А=7, Q=66 л/с"),
+        ("O3", "Подготовить пенную атаку",            "3 ГПС-600 на тушение: Q_пена = 3×5.64 = 16.9 л/с ≥ 8.4 л/с"),
+    ],
+    "S4": [
+        ("O3", "Пенная атака ГПС-600",               "Одновременная подача от 3 ГПС-600 через пеноподъёмники"),
+        ("O2", "Непрерывное охлаждение стенок",       "Не прекращать охлаждение во время атаки и после"),
+        ("O6", "Сигнал отхода при угрозе вскипания", "Наблюдатель контролирует уровень и температуру продукта"),
+        ("T2", "Обеспечить резерв сил",               "50% личного состава в резерве за обвалованием"),
+    ],
+    "S5": [
+        ("O4", "Контроль остаточного горения",        "Убедиться в отсутствии горения. ИКС-контроль температуры"),
+        ("O2", "Охлаждение резервуаров ≥ 6 ч",        "Норма: охлаждение после локализации не менее 6 часов"),
+        ("T2", "Поэтапная демобилизация",             "Возврат СиС после письменного разрешения на свёртывание"),
+    ],
+}
+
+# ── Реестр сценариев симуляции ────────────────────────────────────────────────
+SCENARIOS: Dict[str, dict] = {
+    "tuapse": {
+        "name":              "РВС №9 — ООО «РН-МТ Туапсе» (14–17.03.2025, ранг №4, 81 ч)",
+        "short":             "Туапсе РВС-20000",
+        "total_min":         TOTAL_MIN,
+        "initial_fire_area": 1250.0,
+        "fuel":              "бензин",
+        "rvs_name":          "РВС №9 (V=20 000 м³)",
+        "rvs_diameter_m":    40.0,
+        "fire_rank_default": 4,
+        "roof_obstruction_init": 0.70,
+        "foam_intensity":    0.065,      # ГОСТ Р 51043-2002
+        "tl_lookup":         _TL_LOOKUP,
+        "actions_by_phase":  None,       # ACTIONS_BY_PHASE используется глобально
+    },
+    "serp": {
+        "name":              "РВС №20 — Нефтебаза ЗАО «Рос-Трейд», Серпухов (ПТП 2015, ранг №2)",
+        "short":             "Серпухов РВС-2000",
+        "total_min":         TOTAL_MIN_SERP,
+        "initial_fire_area": 168.0,
+        "fuel":              "бензин",
+        "rvs_name":          "РВС №20 (V=2000 м³)",
+        "rvs_diameter_m":    14.62,
+        "fire_rank_default": 2,
+        "roof_obstruction_init": 0.0,   # нет плавающей крыши (конусная кровля)
+        "foam_intensity":    0.05,       # ПТП / Справочник РТП, стр. 104
+        "tl_lookup":         _TL_SERP_LOOKUP,
+        "actions_by_phase":  ACTIONS_BY_PHASE_SERP,
+    },
+}
+
 # ── Действия РТП по фазам пожара (для вкладки «Справочник») ──────────────────
 ACTIONS_BY_PHASE = {
     "S1": [
@@ -280,20 +371,24 @@ class SimSnapshot:
 
 
 class TankFireSim:
-    """Дискретно-событийная симуляция тушения пожара РВС №9."""
+    """Дискретно-событийная симуляция тушения пожара РВС."""
 
-    def __init__(self, seed: int = 42, training: bool = True):
+    def __init__(self, seed: int = 42, training: bool = True,
+                 scenario: str = "tuapse"):
         self.rng      = random.Random(seed)
         self.np_rng   = np.random.RandomState(seed)
         self.agent    = QLAgent(seed=seed)
         self.training = training
+        self.scenario = scenario
+        self._cfg     = SCENARIOS[scenario]
         self.reset()
 
     # ── Инициализация ──────────────────────────────────────────────────────────
     def reset(self):
+        cfg = self._cfg
         self.t              = 0
         self.phase          = "S1"
-        self.fire_area      = 1250.0
+        self.fire_area      = cfg["initial_fire_area"]
         self.n_trunks_burn  = 0
         self.n_trunks_nbr   = 0
         self.n_pns          = 0          # ПНС на водоисточниках
@@ -310,14 +405,13 @@ class TankFireSim:
         self.water_flow     = 0.0
         self.last_action    = 12         # O4: разведка по умолчанию
 
-        # Физика пенной атаки (нормы ГОСТ Р 51043-2002)
-        # Плавающая крыша РВС №9 имеет каркас из ферм, блокирующий подачу пены
-        self.roof_obstruction = 0.70    # нач. препятствие: каркас крыши ≈70%
+        # Физика пенной атаки (нормы ГОСТ Р 51043-2002 / Справочник РТП)
+        self.roof_obstruction = cfg["roof_obstruction_init"]
         self.akp50_available  = False   # АКП-50 (коленчатый подъёмник) на сцене
         self.foam_flow_ls     = 0.0     # суммарный расход пенного раствора, л/с
 
         # История для графиков
-        self.h_fire:   List[Tuple[int,float]] = [(0, 1250.0)]
+        self.h_fire:   List[Tuple[int,float]] = [(0, cfg["initial_fire_area"])]
         self.h_water:  List[Tuple[int,float]] = [(0, 0.0)]
         self.h_risk:   List[Tuple[int,float]] = [(0, 0.3)]
         self.h_trunks: List[Tuple[int,int]]   = [(0, 0)]
@@ -394,7 +488,8 @@ class TankFireSim:
                 q_foam = self._compute_foam_flow()
                 self.foam_flow_ls = q_foam
                 result = foam_attack_feasibility(
-                    self.fire_area, q_foam, self.roof_obstruction, "бензин"
+                    self.fire_area, q_foam, self.roof_obstruction,
+                    self._cfg["fuel"]
                 )
                 ok = result["feasible"]
                 if ok:
@@ -419,7 +514,7 @@ class TankFireSim:
         elif code == "O5":  # Ликвидация розлива
             if self.spill:
                 self.spill = False
-                self.fire_area = max(1250.0, self.fire_area - 300)
+                self.fire_area = max(self._cfg["initial_fire_area"], self.fire_area - 300)
                 r = 1.5
                 self._log(P["success"], "✅ O5: розлив горящего топлива ликвидирован (−300 м²)")
 
@@ -482,19 +577,27 @@ class TankFireSim:
     def _compute_foam_flow(self) -> float:
         """Суммарный расход пенного раствора для текущей атаки, л/с.
 
-        Модель оборудования (ГОСТ Р 51043-2002, данные по пожару РВС №9 Туапсе):
-          - Базовая атака: 2 × Акрон-Аполло (33.3 л/с × 2 = 66.6 л/с)
-          - Со 2-й атаки: + Муссон-125 (125 л/с)
-          - При наличии АКП-50: + 2×ГПС-1000 (16.7 л/с × 2) + Антенор-1500 (25 л/с)
-            → также снижает препятствие крыши до 0.20 (подача через люк)
+        Сценарий «tuapse» (ГОСТ Р 51043-2002, пожар РВС №9 Туапсе 2025):
+          - Базовая: 2 × Акрон-Аполло (66.6 л/с)
+          - Со 2-й: + Муссон-125 (+125 л/с)
+          - С АКП-50: + 2×ГПС-1000 + Антенор-1500 → roof_obstruction=0.20
+
+        Сценарий «serp» (Справочник РТП, ПТП Серпухов 2015):
+          - Базовая: 3 × ГПС-600 (3 × 5.64 = 16.9 л/с)
+          - Со 2-й атаки: + 2 × ГПС-600 (до 5 × ГПС-600 = 28.2 л/с)
+          - Нет препятствия крыши (конусная кровля)
         """
-        q = 2.0 * NOZZLE_DB["Акрон-Аполло"].flow_ls   # 66.6 л/с
+        if self.scenario == "serp":
+            n_gps = min(5, 3 + max(0, self.foam_attacks - 1))
+            return n_gps * 5.64   # ПТП: q_ГПС-600_факт = 5.64 л/с
+        # tuapse
+        q = 2.0 * NOZZLE_DB["Акрон-Аполло"].flow_ls
         if self.foam_attacks >= 2:
-            q += NOZZLE_DB["Муссон-125"].flow_ls        # +125 л/с
+            q += NOZZLE_DB["Муссон-125"].flow_ls
         if self.akp50_available:
-            q += 2.0 * NOZZLE_DB["ГПС-1000"].flow_ls   # +33.4 л/с (через люк)
-            q += NOZZLE_DB["Антенор-1500"].flow_ls      # +25 л/с
-            self.roof_obstruction = 0.20                # АКП снижает препятствие
+            q += 2.0 * NOZZLE_DB["ГПС-1000"].flow_ls
+            q += NOZZLE_DB["Антенор-1500"].flow_ls
+            self.roof_obstruction = 0.20
         return q
 
     def _log(self, color: str, text: str):
@@ -505,8 +608,9 @@ class TankFireSim:
         self.t += dt
 
         # Применить скриптованные события из хронологии
+        tl = self._cfg["tl_lookup"]
         for step_t in range(self.t - dt + 1, self.t + 1):
-            for ev in _TL_LOOKUP.get(step_t, []):
+            for ev in tl.get(step_t, []):
                 if step_t not in self._scripted_triggered:
                     self._scripted_triggered.add(step_t)
                     self._apply_scripted(step_t, ev[2])
@@ -602,24 +706,50 @@ class TankFireSim:
             self.foam_flow_ls = max(self.foam_flow_ls,
                                     NOZZLE_DB["Муссон-125"].flow_ls +
                                     2.0 * NOZZLE_DB["Акрон-Аполло"].flow_ls)
+        # Серпухов: ГПС-600 на позиции → foam_ready
+        if "гпс-600" in lo and self.foam_conc > 0:
+            self.foam_ready = True
+        # Серпухов: установка на ПГ/пожарные гидранты
+        if ("пожарные гидранты" in lo or ("пг-" in lo and "установить" in lo)):
+            self.n_pns = min(4, self.n_pns + 1)
+            self.water_flow += 15.0   # ПГ даёт ~15 л/с
+        # Серпухов: обновить n_trunks_burn по количеству стволов А (РС-70)
+        if "стволов а" in lo or "ствола а" in lo:
+            import re as _re
+            m = _re.search(r'(\d+)\s*стволов?\s*а', lo)
+            if m:
+                self.n_trunks_burn = max(self.n_trunks_burn, int(m.group(1)))
+                self.water_flow = max(self.water_flow, self.n_trunks_burn * 7.0)
 
     def _update_fire(self):
         if self.extinguished:
             self.fire_area = 0.0
             return
+        area0 = self._cfg["initial_fire_area"]
         if self.localized:
             # Медленное уменьшение при локализации
-            self.fire_area = max(800.0, self.fire_area - self.rng.uniform(0, 1))
+            min_area = area0 * 0.5 if self.scenario == "serp" else 800.0
+            self.fire_area = max(min_area, self.fire_area - self.rng.uniform(0, 1))
         elif self.n_trunks_burn < 4:
             # Рост при недостаточном охлаждении
-            self.fire_area = min(2500.0, self.fire_area + self.rng.uniform(0, 3))
+            max_area = area0 * 2.5
+            self.fire_area = min(max_area, self.fire_area + self.rng.uniform(0, 3))
 
     def _update_phase(self):
-        if   self.extinguished:          self.phase = "S5"
-        elif self.t >= 4740:             self.phase = "S4"
-        elif self.t >= 160:              self.phase = "S3"
-        elif self.t >= 10:               self.phase = "S2"
-        else:                            self.phase = "S1"
+        if self.extinguished:
+            self.phase = "S5"
+        elif self.scenario == "serp":
+            # Серпухов: фазы по укороченной шкале времени
+            if   self.t >= 90:   self.phase = "S4"
+            elif self.t >= 20:   self.phase = "S3"
+            elif self.t >= 14:   self.phase = "S2"
+            else:                self.phase = "S1"
+        else:
+            # Туапсе: фазы по оригинальной шкале
+            if   self.t >= 4740: self.phase = "S4"
+            elif self.t >= 160:  self.phase = "S3"
+            elif self.t >= 10:   self.phase = "S2"
+            else:                self.phase = "S1"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -638,7 +768,8 @@ class TankFireApp(tk.Tk):
         self.resizable(True, True)
         self.minsize(1100, 760)
 
-        self.sim       = TankFireSim(seed=42, training=True)
+        self._scenario_key = "tuapse"
+        self.sim       = TankFireSim(seed=42, training=True, scenario=self._scenario_key)
         self._running  = False
         self._after_id: Optional[str] = None
         self._speed    = 15
@@ -659,8 +790,8 @@ class TankFireApp(tk.Tk):
         hdr.pack_propagate(False)
         tk.Label(hdr, text="🔥  СИМУЛЯЦИЯ УПРАВЛЕНИЯ ТУШЕНИЕМ ПОЖАРА РВС",
                  font=("Arial", 15, "bold"), bg=P["panel"], fg=P["hi"]).pack(side="left", padx=16, pady=8)
-        tk.Label(hdr,
-                 text="ООО «РН-Морской терминал Туапсе» | РВС №9 (V=20 000 м³) | 14–17.03.2025 | Ранг №4",
+        self._hdr_var = tk.StringVar(value=SCENARIOS[self._scenario_key]["name"])
+        tk.Label(hdr, textvariable=self._hdr_var,
                  font=("Arial", 9), bg=P["panel"], fg=P["text2"]).pack(side="left")
 
         # ── Главная панель ────────────────────────────────────────────────────
@@ -957,6 +1088,22 @@ class TankFireApp(tk.Tk):
             var.trace_add("write", lambda *_: val_lbl.config(text=fmt.format(var.get())))
             return var
 
+        # ── Выбор сценария ────────────────────────────────────────────────────
+        f_scen = section("Сценарий моделирования")
+        self._scenario_var = tk.StringVar(value=self._scenario_key)
+        for key, cfg in SCENARIOS.items():
+            tk.Radiobutton(
+                f_scen, text=cfg["name"], variable=self._scenario_var, value=key,
+                bg=P["panel"], fg=P["text"], selectcolor=P["panel2"],
+                font=("Arial", 8), activebackground=P["panel"],
+                activeforeground=P["hi"], wraplength=520, justify="left",
+            ).pack(anchor="w", padx=10, pady=2)
+        # Нормативные требования (динамически по сценарию)
+        self._norms_label_var = tk.StringVar(value=self._get_norms_text())
+        tk.Label(f_scen, textvariable=self._norms_label_var,
+                 font=("Consolas", 8), bg=P["panel"], fg=P["hi"],
+                 justify="left").pack(anchor="w", padx=14, pady=(4, 2))
+
         # ── Параметры пожара ──────────────────────────────────────────────────
         f_fire = section("Параметры пожара")
         self._var_init_area   = slider_row(f_fire, "Начальная площадь (м²)",  500, 3000, 1250, step=50)
@@ -1013,7 +1160,34 @@ class TankFireApp(tk.Tk):
                   fg="#fff", font=("Arial", 9, "bold"),
                   relief="flat", padx=10, pady=4).pack(pady=4)
 
+    def _get_norms_text(self) -> str:
+        """Нормативные требования для текущего сценария."""
+        key = getattr(self, "_scenario_key", "tuapse")
+        cfg = SCENARIOS[key]
+        S   = cfg["initial_fire_area"]
+        I   = cfg["foam_intensity"]
+        Q_req = I * S
+        D   = cfg["rvs_diameter_m"]
+        import math as _m
+        Q_cool = 0.8 * _m.pi * D  # л/с охлаждение горящего РВС
+        roof = cfg["roof_obstruction_init"]
+        return (f"  {cfg['rvs_name']}  |  S_зеркала={S:.0f} м²  |  "
+                f"I_пены={I:.3f} л/(с·м²)  |  Q_пены≥{Q_req:.1f} л/с  |  "
+                f"Q_охл≥{Q_cool:.1f} л/с  |  "
+                f"Препятствие крыши: {roof*100:.0f}%")
+
     def _apply_settings(self):
+        new_scenario = self._scenario_var.get()
+        if new_scenario != self._scenario_key:
+            self._on_pause()
+            self._scenario_key = new_scenario
+            seed = int(getattr(self, "_var_seed", None) and 42) or 42
+            self.sim = TankFireSim(seed=42, training=True, scenario=new_scenario)
+            self._hdr_var.set(SCENARIOS[new_scenario]["name"])
+            self._norms_label_var.set(self._get_norms_text())
+            self._draw_map()
+            self._update_charts()
+            self._update_status()
         self.sim.agent.epsilon = float(self._var_epsilon.get())
         self.sim.agent.alpha   = float(self._var_lr.get())
         self.sim.agent.gamma   = float(self._var_gamma.get())
@@ -1461,8 +1635,10 @@ class TankFireApp(tk.Tk):
             sv["foam_flow"].set(f"—  (норм.≥{q_req:.0f} л/с)")
 
         # Прогресс
-        pct = min(100, int(100 * sim.t / TOTAL_MIN))
-        self._prog_var.set(f"{sim.t} / {TOTAL_MIN} мин  ({pct}%)")
+        total = sim._cfg["total_min"]
+        self._prog_bar.config(maximum=total)
+        pct = min(100, int(100 * sim.t / total))
+        self._prog_var.set(f"{sim.t} / {total} мин  ({pct}%)")
         self._prog_bar["value"] = sim.t
 
     def _log_sim_event(self, t: int, color: str, text: str):
@@ -1486,7 +1662,7 @@ class TankFireApp(tk.Tk):
         if not self._running:
             return
         for _ in range(self._speed):
-            if self.sim.t >= TOTAL_MIN or self.sim.extinguished:
+            if self.sim.t >= self.sim._cfg["total_min"] or self.sim.extinguished:
                 self._on_pause()
                 break
             self._snap = self.sim.step(dt=self.STEP_MIN)
