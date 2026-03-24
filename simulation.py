@@ -11,7 +11,7 @@ from .state_space import (FirePhase, SituationState, ResourceUnit,
                           ResourceSpace, AdaptationResult)
 from .semi_markov import SemiMarkovChain
 from .metrics import (SAURMetrics, compute_risk_score, compute_delta_s,
-                      adaptation_trigger, EPS_THRESHOLD)
+                      adaptation_trigger, EPS_THRESHOLD, compute_fire_rank)
 from .database import OIL_BASE_GARRISON, UNIT_DATABASE
 from .level_l1 import L1SensorLayer, COP
 from .level_l2 import L2TacticalAgent
@@ -111,7 +111,8 @@ class SAURSimulation:
         heapq.heappush(self._eq, Event(self._t + dt, etype, data))
 
     def _update_true_situation(self) -> None:
-        """Update ground truth situation from semi-Markov chain."""
+        """Обновить оперативную обстановку (ОТО) из цепи Маркова."""
+        from .state_space import ReshayusheeNapravlenie
         phase, _, transitioned = self._chain.step(self._t)
         self._true_situation.phase = phase
         self._true_situation.timestamp = self._t
@@ -125,6 +126,19 @@ class SAURSimulation:
         if transitioned and phase == FirePhase.RESOLVED:
             self._fire_active = False
             self._true_situation.fire_area_m2 = 0.0
+
+        # Обновить номер пожара и решающее направление по фазе
+        self._true_situation.fire_rank = compute_fire_rank(
+            self._true_situation, self._resources)
+        rn_by_phase = {
+            FirePhase.S1: ReshayusheeNapravlenie.SPASENIE_LYUDEY,
+            FirePhase.S2: ReshayusheeNapravlenie.LOKALIZATSIYA,
+            FirePhase.S3: ReshayusheeNapravlenie.ZASHCHITA_SOSEDNIKH,
+            FirePhase.S4: ReshayusheeNapravlenie.LIKVIDATSIYA,
+            FirePhase.S5: ReshayusheeNapravlenie.LIKVIDATSIYA,
+        }
+        self._true_situation.reshayushee_napravlenie = rn_by_phase.get(
+            phase, ReshayusheeNapravlenie.LOKALIZATSIYA)
 
     def _compute_snapshot_metrics(self, cop: COP, action: int,
                                    result: AdaptationResult) -> SAURMetrics:
@@ -150,13 +164,18 @@ class SAURSimulation:
         n_avail  = len(self._resources.available_units)
 
         if risk >= 0.75:
-            risk_level = "CRITICAL"
+            risk_level = "КРИТИЧЕСКИЙ"
         elif risk >= 0.50:
-            risk_level = "HIGH"
+            risk_level = "ВЫСОКИЙ"
         elif risk >= 0.25:
-            risk_level = "MEDIUM"
+            risk_level = "СРЕДНИЙ"
         else:
-            risk_level = "LOW"
+            risk_level = "НИЗКИЙ"
+
+        fire_rank = compute_fire_rank(sit, self._resources)
+        has_shtab = fire_rank >= 2
+        bu_count  = max(1, n_active // 3)
+        stp_count = bu_count // 3
 
         return SAURMetrics(
             cop_accuracy=cop.confidence,
@@ -173,6 +192,11 @@ class SAURSimulation:
             n_available_units=n_avail,
             fire_area_m2=sit.fire_area_m2,
             casualties=sit.casualties,
+            fire_rank=fire_rank,
+            has_shtab=has_shtab,
+            bu_count=bu_count,
+            stp_count=stp_count,
+            reshayushee_napravlenie=sit.reshayushee_napravlenie.name,
         )
 
     def _handle_tick(self, ev: Event) -> None:

@@ -34,7 +34,7 @@ class L4SystemicCenter:
     def monitor_readiness(self) -> GarrisonStatus:
         total = len(self.resources.vehicles)
         ready = sum(1 for u in self.resources.vehicles if u.readiness > 0.5)
-        deployed = sum(1 for u in self.resources.vehicles if u.task != "standby")
+        deployed = sum(1 for u in self.resources.vehicles if u.task != "дежурство")
         frac = ready / max(total, 1)
         return GarrisonStatus(
             total_units=total, ready_units=ready, deployed_units=deployed,

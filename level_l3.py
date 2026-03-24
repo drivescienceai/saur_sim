@@ -13,20 +13,25 @@ from .state_space import (FirePhase, SituationState, ResourceUnit,
 from .rl_agent import (QLearningAgent, RLState, compute_reward,
                        ACTION_NAMES, ACTION_SPACE, ActionLevel,
                        get_action_mask, _CODE_TO_IDX)
-from .metrics import compute_risk_score, compute_delta_s, adaptation_trigger
+from .metrics import compute_risk_score, compute_delta_s, adaptation_trigger, compute_fire_rank
 
 
 @dataclass
 class OperationalPlan:
+    """Оперативный план РТП — текущая диспозиция сил и средств."""
     timestamp: float
     phase: FirePhase
-    allocated_units: List[str]
-    sectors: Dict[str, str]       # unit_id -> sector
-    tactics: Dict[str, str]       # unit_id -> tactic
+    allocated_units: List[str]         # задействованные единицы
+    sectors: Dict[str, str]            # unit_id -> боевой участок (БУ)
+    tactics: Dict[str, str]            # unit_id -> боевая задача
     reserve_requested: int = 0
-    priority: str = "NORMAL"
-    action_code: str = "O4"       # code of the RL action that generated this plan
-    action_level: str = "operational"
+    priority: str = "НОРМАЛЬНЫЙ"
+    action_code: str = "O4"            # код действия RL, породившего план
+    action_level: str = "оперативный"
+    fire_rank: int = 1                 # номер пожара (ранг вызова)
+    has_shtab: bool = False            # создан оперативный штаб (ОШ)
+    bu_count: int = 1                  # число боевых участков (БУ)
+    stp_count: int = 0                 # число секторов тушения пожара (СТП)
 
 
 class L3OperationalHQ:
@@ -99,9 +104,9 @@ class L3OperationalHQ:
     def f_allocate(self, situation: SituationState, resources: ResourceSpace,
                    L7: float, L1: float, t: float,
                    training: bool = True) -> Tuple[int, AdaptationResult]:
-        """RL-based allocation decision with action masking.
+        """Решение РТП по распределению С и С на основе RL с маскировкой действий.
 
-        Returns (action_index 0..14, AdaptationResult with delta_pi).
+        Возвращает (индекс_действия 0..14, AdaptationResult с delta_pi).
         """
         rl_state = self._make_rl_state(situation, resources, L7)
         mask     = self._build_mask(situation, resources)
@@ -131,130 +136,131 @@ class L3OperationalHQ:
 
     def _action_to_delta_pi(self, action_idx: int, situation: SituationState,
                             resources: ResourceSpace, t: float) -> AdaptationResult:
-        """Convert RL action index to concrete operational plan delta_pi."""
+        """Преобразовать индекс действия RL в конкретный оперативный план delta_pi."""
         rt = ACTION_SPACE[action_idx]
         avail  = resources.available_units
         active = resources.active_units
         code   = rt.code
 
-        # ── Strategic ─────────────────────────────────────────────────────
+        # ── Стратегические действия (РН по БУПО) ─────────────────────────
         if code == "S1":
             return AdaptationResult(
                 mode=AdaptationMode.MOBILIZATION,
-                actions=["Приоритет — спасение людей",
+                actions=["РН: спасение людей — реальная угроза жизни",
                          "Направить АСА и АЛ к очагу угрозы",
-                         "Запросить скорую помощь"],
-                priority_level="URGENT")
+                         "Запросить скорую помощь; организовать эвакуацию"],
+                priority_level="КРИТИЧЕСКИЙ")
 
         if code == "S2":
             return AdaptationResult(
                 mode=AdaptationMode.TACTICAL,
-                actions=["Защита соседних объектов",
+                actions=["РН: защита соседних объектов от распространения огня",
                          f"Выставить {max(1, len(active)//3)} ствола на периметр"],
-                priority_level="WARNING")
+                priority_level="ПРЕДУПРЕЖДЕНИЕ")
 
         if code == "S3":
             return AdaptationResult(
                 mode=AdaptationMode.OPERATIONAL,
-                actions=["Локализация — ограничение площади горения",
-                         "Охватить периметр рукавными линиями"],
-                priority_level="WARNING")
+                actions=["РН: локализация — ограничение площади горения",
+                         "Охватить периметр рукавными линиями",
+                         "Сосредоточить С и С на решающем направлении"],
+                priority_level="ПРЕДУПРЕЖДЕНИЕ")
 
         if code == "S4":
             n_trunks = max(1, len(avail))
             return AdaptationResult(
                 mode=AdaptationMode.OPERATIONAL,
-                actions=[f"Ликвидация: ввести {n_trunks} ствол(а) на решающем направлении",
-                         "Максимальная интенсивность подачи ОВ"],
-                priority_level="URGENT")
+                actions=[f"РН: ликвидация горения — ввести {n_trunks} ствол(а) на РН",
+                         "Максимальная интенсивность подачи огнетушащего вещества (ОВ)"],
+                priority_level="СРОЧНЫЙ")
 
         if code == "S5":
             return AdaptationResult(
                 mode=AdaptationMode.MOBILIZATION,
-                actions=["Предотвращение вскипания/выброса",
+                actions=["РН: предотвращение вскипания/выброса нефтепродуктов (ОФП)",
                          "Охлаждение стенок резервуара",
-                         "Готовность к экстренному отходу"],
+                         "Готовность к экстренному отходу — сигнал ГДЗС"],
                 resources_requested=0,
-                priority_level="CRITICAL")
+                priority_level="КРИТИЧЕСКИЙ")
 
-        # ── Tactical ──────────────────────────────────────────────────────
+        # ── Тактические действия (НУТ/НС) ────────────────────────────────
         if code == "T1":
             self._regroup_start = t
             return AdaptationResult(
                 mode=AdaptationMode.TACTICAL,
-                actions=["Создать участок тушения",
-                         f"Назначить НУТ, распределить {len(avail)} ед."],
-                priority_level="ADVISORY")
+                actions=["Создать боевой участок (БУ) / сектор тушения пожара (СТП)",
+                         f"Назначить НУТ, распределить {len(avail)} ед. С и С"],
+                priority_level="ИНФОРМАЦИОННЫЙ")
 
         if code == "T2":
             self._regroup_start = t
             return AdaptationResult(
                 mode=AdaptationMode.TACTICAL,
-                actions=[f"Перераспределить {len(active)} ед. по секторам",
-                         "Оптимизировать позиции стволов"],
-                priority_level="ADVISORY")
+                actions=[f"Перераспределить {len(active)} ед. С и С по БУ/секторам",
+                         "Оптимизировать позиции стволов и рукавных линий"],
+                priority_level="ИНФОРМАЦИОННЫЙ")
 
         if code == "T3":
             n_req = max(1, len(active) // 2)
             return AdaptationResult(
                 mode=AdaptationMode.MOBILIZATION,
-                actions=[f"Вызов подкрепления: {n_req} ед. от Л4",
-                         "Повысить ранг пожара",
-                         "Запрос специальной техники"],
+                actions=[f"Повышение ранга пожара: вызов {n_req} ед. от Л4 (ПСГ)",
+                         "Запрос специальной техники (АЛ, АГДЗС, АШ)",
+                         "Создать оперативный штаб (ОШ) при необходимости"],
                 resources_requested=n_req,
-                priority_level="WARNING")
+                priority_level="ПРЕДУПРЕЖДЕНИЕ")
 
         if code == "T4":
             return AdaptationResult(
                 mode=AdaptationMode.NORMAL,
-                actions=["Изменить схему развёртывания НРС",
-                         "Скорректировать способ подачи ОВ"],
-                priority_level="INFO")
+                actions=["Изменить схему развёртывания насосно-рукавной системы (НРС)",
+                         "Скорректировать способ подачи огнетушащего вещества (ОВ)"],
+                priority_level="НОРМАЛЬНЫЙ")
 
-        # ── Operational ───────────────────────────────────────────────────
+        # ── Оперативные действия (непосредственное тушение) ───────────────
         if code == "O1":
             return AdaptationResult(
                 mode=AdaptationMode.OPERATIONAL,
-                actions=["Подать ствол на позицию",
-                         "Установить ПА на водоисточник"],
-                priority_level="NORMAL")
+                actions=["Подать ствол на позицию (РН)",
+                         "Установить пожарный автомобиль (ПА) на водоисточник"],
+                priority_level="НОРМАЛЬНЫЙ")
 
         if code == "O2":
             return AdaptationResult(
                 mode=AdaptationMode.OPERATIONAL,
-                actions=["Охлаждение конструкций/резервуаров",
-                         "Поддерживать расход 3-5 л/с на ствол"],
-                priority_level="NORMAL")
+                actions=["Охлаждение строительных конструкций/резервуаров",
+                         "Поддерживать расход ОВ 3–5 л/с на ствол"],
+                priority_level="НОРМАЛЬНЫЙ")
 
         if code == "O3":
             return AdaptationResult(
                 mode=AdaptationMode.OPERATIONAL,
-                actions=["Пенная атака на резервуар",
-                         "Подать ГПС-600 по периметру"],
-                priority_level="URGENT")
+                actions=["Пенная атака на резервуар с нефтепродуктами",
+                         "Подать ГПС-600 по периметру резервуара"],
+                priority_level="СРОЧНЫЙ")
 
         if code == "O4":
             return AdaptationResult(
                 mode=AdaptationMode.NORMAL,
-                actions=["Разведка: определить границы зоны горения",
-                         "Установить наличие людей и угрозу распространения"],
-                priority_level="INFO")
+                actions=["Разведка пожара: определить границы зоны горения",
+                         "Установить наличие людей (ОТО) и угрозу распространения ОФП"],
+                priority_level="НОРМАЛЬНЫЙ")
 
         if code == "O5":
             return AdaptationResult(
                 mode=AdaptationMode.MOBILIZATION,
-                actions=["Эвакуация: провести по безопасному маршруту",
-                         "АЛ-30 к точкам спасения"],
-                priority_level="URGENT")
+                actions=["Эвакуация: провести людей по безопасному маршруту",
+                         "АЛ-30 к точкам спасения; организовать пункт сбора"],
+                priority_level="СРОЧНЫЙ")
 
         if code == "O6":
             return AdaptationResult(
                 mode=AdaptationMode.DEGRADED,
-                actions=["Сигнал отхода — немедленный вывод личного состава",
-                         "Определить зону безопасного отхода"],
-                priority_level="CRITICAL")
+                actions=["Сигнал отхода — немедленный вывод личного состава (ЛС)",
+                         "Определить зону безопасного отхода; доклад РТП"],
+                priority_level="КРИТИЧЕСКИЙ")
 
-        # fallback
+        # запасной вариант
         return AdaptationResult(mode=AdaptationMode.NORMAL, actions=[])
 
     def f_predict(self, situation: SituationState, t: float) -> dict:

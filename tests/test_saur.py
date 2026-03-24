@@ -325,7 +325,7 @@ class TestMetrics:
 
     def test_saur_metrics_default(self):
         m = SAURMetrics()
-        assert m.risk_level == "LOW"
+        assert m.risk_level == "НИЗКИЙ"
         assert m.phase == FirePhase.NORMAL
 
 
@@ -391,15 +391,15 @@ class TestL2TacticalAgent:
 
     def test_assess_critical(self, l2_agent):
         sit = SituationState(phase=FirePhase.S3, fire_area_m2=5000.0)
-        assert l2_agent.assess(sit) == "CRITICAL"
+        assert l2_agent.assess(sit) == "КРИТИЧЕСКАЯ"
 
     def test_assess_active(self, l2_agent):
         sit = SituationState(phase=FirePhase.S2)
-        assert l2_agent.assess(sit) == "ACTIVE"
+        assert l2_agent.assess(sit) == "АКТИВНАЯ"
 
     def test_assess_stable(self, l2_agent):
         sit = SituationState(phase=FirePhase.NORMAL)
-        assert l2_agent.assess(sit) == "STABLE"
+        assert l2_agent.assess(sit) == "ШТАТНАЯ"
 
     def test_decide_respects_directive(self, l2_agent, basic_situation):
         tactic = l2_agent.decide(basic_situation, directive="special_tactic")
@@ -411,11 +411,11 @@ class TestL2TacticalAgent:
         assert t == TACTIC_MAP[FirePhase.S5]
 
     def test_deploy_sets_unit_task(self, l2_agent):
-        l2_agent.deploy("attack_perimeter", "B")
-        assert l2_agent.unit.task == "attack_perimeter"
+        l2_agent.deploy("боевое развёртывание", "БУ-2")
+        assert l2_agent.unit.task == "боевое развёртывание"
 
     def test_deploy_logs_order(self, l2_agent):
-        l2_agent.deploy("patrol")
+        l2_agent.deploy("разведка пожара")
         assert len(l2_agent.orders_log) == 1
 
     def test_control_safety_unsafe_conditions(self, l2_agent):
@@ -436,9 +436,9 @@ class TestL2TacticalAgent:
         assert order.unit_id == l2_agent.unit.unit_id
 
     def test_request_resources_has_from_key(self, l2_agent):
-        req = l2_agent.request_resources("low water")
-        assert "from" in req
-        assert req["from"] == l2_agent.unit.unit_id
+        req = l2_agent.request_resources("низкий запас воды")
+        assert "от" in req
+        assert req["от"] == l2_agent.unit.unit_id
 
 
 # ===========================================================================

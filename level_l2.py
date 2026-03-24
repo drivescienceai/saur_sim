@@ -1,89 +1,118 @@
-"""L2: Tactical Level — unit commander decisions.
+"""L2: Тактический уровень — решения начальника участка тушения (НУТ/НС).
 
-Functions: f_assess, f_decide, f_deploy, f_control_safety
-Autonomy: alpha2 in [0.3, 0.6]
-Metric: mu2 = speed of localization, personnel casualties = 0
+Функции: f_assess (оценка ОТО), f_decide (выбор БЗ), f_deploy (расстановка
+сил), f_control_safety (контроль безопасности ЛС).
+Самостоятельность alpha2 in [0.3, 0.6].
+Метрика mu2: время локализации, потери ЛС = 0.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 from .state_space import (FirePhase, SituationState, ResourceUnit,
-                          AdaptationMode, AdaptationResult)
+                          AdaptationMode, AdaptationResult,
+                          ReshayusheeNapravlenie)
 
 
-TACTIC_MAP = {
-    FirePhase.NORMAL:   "patrol",
-    FirePhase.S1:       "recon_and_entry",
-    FirePhase.S2:       "attack_perimeter",
-    FirePhase.S3:       "defensive_protection",
-    FirePhase.S4:       "surround_and_drown",
-    FirePhase.S5:       "overhaul_and_check",
-    FirePhase.RESOLVED: "withdrawal",
+# Боевые задачи НУТ по фазам пожара (БУПО: раздел «Действия на пожаре»)
+TACTIC_MAP: Dict[FirePhase, str] = {
+    FirePhase.NORMAL:   "несение дежурства",
+    FirePhase.S1:       "разведка пожара",          # выявить границы, угрозу людям
+    FirePhase.S2:       "боевое развёртывание",     # ввод сил на РН
+    FirePhase.S3:       "локализация пожара",        # ограничение площади горения
+    FirePhase.S4:       "ликвидация горения",        # подача ОВ на РН
+    FirePhase.S5:       "ликвидация последствий",   # проверка, докрут
+    FirePhase.RESOLVED: "сбор и возвращение",       # свёртывание сил
 }
 
 
 @dataclass
 class TacticalOrder:
+    """Боевой приказ НУТ/НС подчинённому подразделению."""
     unit_id: str
-    tactic: str
-    sector: str
+    boyevaya_zadacha: str                  # Боевая задача (тактический манёвр)
+    uchastok_tusheniya: str                # Боевой участок (БУ) / сектор (СТП)
     priority: int = 1
     safety_check: bool = True
+    reshayushee_napravlenie: ReshayusheeNapravlenie = (
+        ReshayusheeNapravlenie.LOKALIZATSIYA)  # РН, на котором задействована единица
 
 
 class L2TacticalAgent:
-    """L2 tactical commander agent.
+    """L2 — начальник участка тушения (НУТ) / начальник сектора (НС).
 
-    Implements situation-action rules for local tactic selection
-    and personnel safety monitoring.
-    Autonomy alpha2 in [0.3, 0.6]: can act independently within sector.
+    Реализует ситуационно-ролевые правила выбора боевой задачи и контроля
+    безопасности личного состава.
+    Самостоятельность alpha2 in [0.3, 0.6]: действует в пределах БУ/сектора.
     """
 
     def __init__(self, unit: ResourceUnit, alpha: float = 0.45):
         self.unit = unit
-        self.alpha = alpha    # autonomy level
-        self.current_tactic = "standby"
+        self.alpha = alpha              # уровень самостоятельности
+        self.current_tactic = "несение дежурства"
         self.safety_ok = True
         self.orders_log: List[TacticalOrder] = []
 
+    # ------------------------------------------------------------------
+    # f_assess — оценка тактической обстановки на БУ
+    # ------------------------------------------------------------------
+
     def assess(self, situation: SituationState) -> str:
-        """f_assess: evaluate local tactical situation."""
+        """f_assess: оценить локальную обстановку на боевом участке."""
         phase = situation.phase
         if situation.fire_area_m2 > 3000 and phase == FirePhase.S3:
-            return "CRITICAL"
+            return "КРИТИЧЕСКАЯ"
         if phase in (FirePhase.S2, FirePhase.S3, FirePhase.S4):
-            return "ACTIVE"
+            return "АКТИВНАЯ"
         if phase == FirePhase.S1:
-            return "ESCALATING"
-        return "STABLE"
+            return "НАРАСТАЮЩАЯ"
+        return "ШТАТНАЯ"
+
+    # ------------------------------------------------------------------
+    # f_decide — выбор боевой задачи
+    # ------------------------------------------------------------------
 
     def decide(self, situation: SituationState,
                directive: Optional[str] = None) -> str:
-        """f_decide: select tactic. Directive from L3 overrides if given."""
+        """f_decide: выбрать БЗ. Директива РТП (L3) имеет приоритет."""
         if directive:
             return directive
         assessment = self.assess(situation)
-        tactic = TACTIC_MAP.get(situation.phase, "standby")
-        if assessment == "CRITICAL" and self.alpha >= 0.4:
-            tactic = "emergency_withdrawal"  # autonomous safety decision
+        tactic = TACTIC_MAP.get(situation.phase, "несение дежурства")
+        if assessment == "КРИТИЧЕСКАЯ" and self.alpha >= 0.4:
+            tactic = "экстренный отход"    # самостоятельное решение по безопасности
         return tactic
 
-    def deploy(self, tactic: str, sector: str = "A") -> TacticalOrder:
-        """f_deploy: issue tactical order to unit."""
+    # ------------------------------------------------------------------
+    # f_deploy — расстановка сил и средств
+    # ------------------------------------------------------------------
+
+    def deploy(self, tactic: str,
+               uchastok: str = "БУ-1",
+               rn: ReshayusheeNapravlenie = ReshayusheeNapravlenie.LOKALIZATSIYA,
+               ) -> TacticalOrder:
+        """f_deploy: выдать боевой приказ подразделению."""
         self.current_tactic = tactic
         order = TacticalOrder(
             unit_id=self.unit.unit_id,
-            tactic=tactic,
-            sector=sector,
+            boyevaya_zadacha=tactic,
+            uchastok_tusheniya=uchastok,
             priority=1,
+            reshayushee_napravlenie=rn,
         )
         self.orders_log.append(order)
         self.unit.task = tactic
         return order
 
+    # ------------------------------------------------------------------
+    # f_control_safety — контроль безопасности ЛС (ГДЗС и т.п.)
+    # ------------------------------------------------------------------
+
     def control_safety(self, situation: SituationState) -> bool:
-        """f_control_safety: check personnel safety conditions."""
-        # Check evacuation conditions
+        """f_control_safety: проверить условия безопасной работы на БУ.
+
+        Критерий отхода: фаза S3, площадь > 5000 м², ветер > 10 м/с
+        (ОФП выходят за пределы допустимых — сигнал отхода по БУПО).
+        """
         if (situation.phase == FirePhase.S3
                 and situation.fire_area_m2 > 5000
                 and situation.wind_speed_ms > 10):
@@ -94,19 +123,28 @@ class L2TacticalAgent:
 
     def step(self, situation: SituationState,
              directive: Optional[str] = None) -> TacticalOrder:
-        """Full L2 decision cycle."""
+        """Полный цикл принятия решений L2 (оценка → решение → приказ)."""
         safe = self.control_safety(situation)
         if not safe:
-            tactic = "emergency_withdrawal"
+            tactic = "экстренный отход"
         else:
             tactic = self.decide(situation, directive)
-        sector = getattr(situation, "_sector", "A")
-        return self.deploy(tactic, sector)
+        uchastok = getattr(situation, "_uchastok", "БУ-1")
+        # Определить РН по текущей фазе
+        rn_map = {
+            FirePhase.S1: ReshayusheeNapravlenie.SPASENIE_LYUDEY,
+            FirePhase.S2: ReshayusheeNapravlenie.LOKALIZATSIYA,
+            FirePhase.S3: ReshayusheeNapravlenie.ZASHCHITA_SOSEDNIKH,
+            FirePhase.S4: ReshayusheeNapravlenie.LIKVIDATSIYA,
+            FirePhase.S5: ReshayusheeNapravlenie.LIKVIDATSIYA,
+        }
+        rn = rn_map.get(situation.phase, ReshayusheeNapravlenie.LOKALIZATSIYA)
+        return self.deploy(tactic, uchastok, rn)
 
     def request_resources(self, reason: str) -> Dict[str, object]:
-        """Send resource request to L3."""
+        """Запрос дополнительных сил и средств у РТП (L3)."""
         return {
-            "from": self.unit.unit_id,
-            "reason": reason,
-            "priority": "HIGH" if not self.safety_ok else "NORMAL",
+            "от": self.unit.unit_id,
+            "причина": reason,
+            "приоритет": "ВЫСОКИЙ" if not self.safety_ok else "НОРМАЛЬНЫЙ",
         }
