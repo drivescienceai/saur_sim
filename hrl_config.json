@@ -1,0 +1,37 @@
+{
+  "_comment": "Конфигурация иерархического RL. Редактируйте через GUI или вручную.",
+  "k3": 6,
+  "k2": 2,
+  "alpha_l3": 0.10,
+  "alpha_l2": 0.12,
+  "alpha_l1": 0.15,
+  "gamma_l3": 0.90,
+  "gamma_l2": 0.92,
+  "gamma_l1": 0.95,
+  "epsilon_start": 0.90,
+  "epsilon_decay": 0.993,
+  "epsilon_min": 0.05,
+  "lambda_intrinsic": 0.30,
+  "soft_masking": true,
+  "curriculum": [
+    {
+      "episodes": 200,
+      "scenarios": ["serp"],
+      "label": "Базовая тактика (ранг 2)"
+    },
+    {
+      "episodes": 300,
+      "scenarios": ["serp", "tuapse"],
+      "label": "Обобщение (ранг 2+4)"
+    },
+    {
+      "episodes": 500,
+      "scenarios": ["tuapse"],
+      "label": "Сложный сценарий (ранг 4)"
+    }
+  ],
+  "goal_prior": null,
+  "n_eval_episodes": 100,
+  "bootstrap_n": 10000,
+  "significance_lvl": 0.05
+}

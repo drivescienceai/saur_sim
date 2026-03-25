@@ -630,7 +630,12 @@ class TankFireSim:
         self.events.append((self.t, color, text))
 
     # ── Основной шаг симуляции ─────────────────────────────────────────────────
-    def step(self, dt: int = 5) -> SimSnapshot:
+    def step(self, dt: int = 5, action: Optional[int] = None) -> SimSnapshot:
+        """Один шаг симуляции.
+
+        action: если задано — использовать это действие вместо агента
+                (применяется иерархическим агентом из hrl_sim.py).
+        """
         self.t += dt
 
         # Применить скриптованные события из хронологии
@@ -648,10 +653,13 @@ class TankFireSim:
         # Обновить фазу
         self._update_phase()
 
-        # RL-решение
+        # RL-решение: внешнее (иерарх. агент) или внутреннее (flat агент)
         state = self._state()
         mask  = self._mask()
-        a     = self.agent.select_action(state, mask, training=self.training)
+        if action is not None:
+            a = int(action)   # иерархический агент передал действие извне
+        else:
+            a = self.agent.select_action(state, mask, training=self.training)
         r     = self._apply(a)
 
         # Обучение
@@ -928,10 +936,15 @@ class TankFireApp(tk.Tk):
         nb.add(t5, text="📄  Отчёт / Экспорт")
         self._build_report_tab(t5)
 
-        # Tab 6 — Настройки
+        # Tab 6 — Иерархический RL
         t6 = tk.Frame(nb, bg=P["bg"])
-        nb.add(t6, text="⚙️  Настройки")
-        self._build_settings_tab(t6)
+        nb.add(t6, text="🏛  Иерархический RL")
+        self._build_hrl_tab(t6)
+
+        # Tab 7 — Настройки
+        t7 = tk.Frame(nb, bg=P["bg"])
+        nb.add(t7, text="⚙️  Настройки")
+        self._build_settings_tab(t7)
 
         self._nb = nb
         return frm
@@ -1289,6 +1302,584 @@ class TankFireApp(tk.Tk):
                 self._manual_status.set(f"❌ Ошибка: {exc}")
 
         threading.Thread(target=_run, daemon=True).start()
+
+    # ── Tab: Иерархический RL ─────────────────────────────────────────────────
+    def _build_hrl_tab(self, parent):
+        """Вкладка 3-уровневого иерархического RL.
+
+        Структура:
+          Верх: параметры (2 колонки) + curriculum + приоры целей
+          Низ:  кнопки управления, прогресс, сравнительная таблица, графики
+        """
+        import threading
+
+        # Состояние вкладки
+        self._hrl_sim     = None   # HierarchicalTankFireSim
+        self._hrl_trained = False
+        self._hrl_stop    = [False]
+        self._hrl_flat_trained = False
+
+        # ── Скроллируемый контейнер ──────────────────────────────────────
+        outer = tk.Frame(parent, bg=P["bg"])
+        outer.pack(fill="both", expand=True)
+        canvas_s = tk.Canvas(outer, bg=P["bg"], highlightthickness=0)
+        vsb = tk.Scrollbar(outer, orient="vertical", command=canvas_s.yview)
+        canvas_s.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas_s.pack(side="left", fill="both", expand=True)
+        inner = tk.Frame(canvas_s, bg=P["bg"])
+        canvas_s.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>",
+                   lambda e: canvas_s.configure(
+                       scrollregion=canvas_s.bbox("all")))
+
+        # ── Заголовок ─────────────────────────────────────────────────────
+        hdr = tk.Frame(inner, bg=P["panel2"])
+        hdr.pack(fill="x", padx=6, pady=(6, 2))
+        tk.Label(hdr, text="🏛  3-УРОВНЕВЫЙ ИЕРАРХИЧЕСКИЙ Q-LEARNING",
+                 font=("Arial", 10, "bold"), bg=P["panel2"], fg=P["hi"]
+                 ).pack(side="left", padx=8, pady=5)
+        tk.Label(hdr, text="L3: НГ/ГУ МЧС → L2: РТП/НШ → L1: НБТП/командир",
+                 font=("Arial", 8), bg=P["panel2"], fg=P["text2"]
+                 ).pack(side="left", padx=4)
+
+        # ── Строка параметров (2 блока рядом) ─────────────────────────────
+        params_row = tk.Frame(inner, bg=P["bg"])
+        params_row.pack(fill="x", padx=6, pady=2)
+
+        # --- Блок «Иерархия» ---
+        pf1 = tk.LabelFrame(params_row, text=" Параметры иерархии ",
+                             font=("Arial", 8, "bold"),
+                             bg=P["panel"], fg=P["text2"], bd=1)
+        pf1.pack(side="left", fill="both", expand=True, padx=(0, 3), pady=2)
+
+        hrl_params = [
+            ("K3 (шагов, L3 НГ):",          "hrl_k3",     "6"),
+            ("K2 (шагов, L2 РТП):",          "hrl_k2",     "2"),
+            ("λ интринзик. награды:",         "hrl_lambda", "0.30"),
+            ("Мягкое маск-ние (1=да):",       "hrl_soft",   "1"),
+        ]
+        self._hrl_vars = {}
+        for i, (lbl, key, dflt) in enumerate(hrl_params):
+            tk.Label(pf1, text=lbl, font=("Arial", 8), bg=P["panel"],
+                     fg=P["text2"], anchor="e", width=22
+                     ).grid(row=i, column=0, padx=4, pady=2, sticky="e")
+            var = tk.StringVar(value=dflt)
+            self._hrl_vars[key] = var
+            tk.Entry(pf1, textvariable=var, width=7, bg=P["panel2"],
+                     fg=P["text"], insertbackground=P["text"],
+                     font=("Arial", 8), relief="flat"
+                     ).grid(row=i, column=1, padx=4, pady=2, sticky="w")
+
+        # --- Блок «Обучение» ---
+        pf2 = tk.LabelFrame(params_row, text=" Параметры Q-learning ",
+                             font=("Arial", 8, "bold"),
+                             bg=P["panel"], fg=P["text2"], bd=1)
+        pf2.pack(side="left", fill="both", expand=True, padx=(3, 3), pady=2)
+
+        rl_params = [
+            ("α L3:",  "hrl_al3", "0.10"), ("γ L3:",  "hrl_gl3", "0.90"),
+            ("α L2:",  "hrl_al2", "0.12"), ("γ L2:",  "hrl_gl2", "0.92"),
+            ("α L1:",  "hrl_al1", "0.15"), ("γ L1:",  "hrl_gl1", "0.95"),
+            ("ε нач:", "hrl_eps", "0.90"), ("ε убыв:","hrl_edc", "0.993"),
+        ]
+        for i, (lbl, key, dflt) in enumerate(rl_params):
+            r, c = divmod(i, 2)
+            tk.Label(pf2, text=lbl, font=("Arial", 8), bg=P["panel"],
+                     fg=P["text2"], anchor="e", width=8
+                     ).grid(row=r, column=c*2, padx=4, pady=2, sticky="e")
+            var = tk.StringVar(value=dflt)
+            self._hrl_vars[key] = var
+            tk.Entry(pf2, textvariable=var, width=7, bg=P["panel2"],
+                     fg=P["text"], insertbackground=P["text"],
+                     font=("Arial", 8), relief="flat"
+                     ).grid(row=r, column=c*2+1, padx=4, pady=2, sticky="w")
+
+        # --- Блок «Curriculum» ---
+        pf3 = tk.LabelFrame(params_row, text=" Curriculum Learning ",
+                             font=("Arial", 8, "bold"),
+                             bg=P["panel"], fg=P["text2"], bd=1)
+        pf3.pack(side="left", fill="both", expand=True, padx=(3, 0), pady=2)
+
+        cur_params = [
+            ("Фаза 1 (эп., Серпухов):",    "hrl_cur1", "200"),
+            ("Фаза 2 (эп., Серп+Туапсе):", "hrl_cur2", "300"),
+            ("Фаза 3 (эп., Туапсе):",       "hrl_cur3", "500"),
+            ("Flat агент (эп.):",            "hrl_flat_ep", "1000"),
+            ("Оценочных прогонов:",          "hrl_neval", "100"),
+        ]
+        for i, (lbl, key, dflt) in enumerate(cur_params):
+            tk.Label(pf3, text=lbl, font=("Arial", 8), bg=P["panel"],
+                     fg=P["text2"], anchor="e", width=24
+                     ).grid(row=i, column=0, padx=4, pady=2, sticky="e")
+            var = tk.StringVar(value=dflt)
+            self._hrl_vars[key] = var
+            tk.Entry(pf3, textvariable=var, width=7, bg=P["panel2"],
+                     fg=P["text"], insertbackground=P["text"],
+                     font=("Arial", 8), relief="flat"
+                     ).grid(row=i, column=1, padx=4, pady=2, sticky="w")
+
+        # ── Калибровка приоров целей L2 ───────────────────────────────────
+        prior_frame = tk.LabelFrame(inner,
+                                    text=" Калибровочные веса целей L2 "
+                                         "(из актов пожаров; 0 = не задано) ",
+                                    font=("Arial", 8, "bold"),
+                                    bg=P["panel"], fg=P["text2"], bd=1)
+        prior_frame.pack(fill="x", padx=6, pady=2)
+
+        try:
+            from hrl_agents import HGoal
+        except ImportError:
+            from .hrl_agents import HGoal
+
+        self._hrl_prior_vars = {}
+        for i, (gidx, gname) in enumerate(HGoal.NAMES.items()):
+            col_base = i * 3
+            color = HGoal.COLORS.get(gidx, P["text"])
+            tk.Label(prior_frame, text=f"{gname}:", font=("Arial", 8),
+                     bg=P["panel"], fg=color, width=14, anchor="e"
+                     ).grid(row=0, column=col_base, padx=(8, 2), pady=4, sticky="e")
+            var = tk.StringVar(value="0")
+            self._hrl_prior_vars[gidx] = var
+            tk.Entry(prior_frame, textvariable=var, width=6, bg=P["panel2"],
+                     fg=color, insertbackground=color, font=("Arial", 8),
+                     relief="flat"
+                     ).grid(row=0, column=col_base+1, padx=2, pady=4, sticky="w")
+        tk.Label(prior_frame,
+                 text="(0 во всех полях = равномерное распределение по умолчанию)",
+                 font=("Arial", 7), bg=P["panel"], fg=P["text2"]
+                 ).grid(row=1, column=0, columnspan=15, padx=8, sticky="w")
+
+        # ── Кнопки управления ─────────────────────────────────────────────
+        btn_frame = tk.Frame(inner, bg=P["panel2"])
+        btn_frame.pack(fill="x", padx=6, pady=4)
+
+        def _btn(text, cmd, fg=P["text"], width=20):
+            return tk.Button(btn_frame, text=text, command=cmd,
+                             bg=P["panel"], fg=fg, font=("Arial", 9, "bold"),
+                             relief="flat", bd=0, padx=8, pady=5,
+                             activebackground=P["accent"], cursor="hand2",
+                             width=width)
+
+        _btn("▶ Обучить Flat агента",   self._hrl_train_flat,
+             fg=P["info"]).pack(side="left", padx=4, pady=3)
+        _btn("🏛 Обучить иерарх. агента", self._hrl_train_hier,
+             fg=P["warn"]).pack(side="left", padx=4, pady=3)
+        _btn("📊 Сравнить агентов",       self._hrl_compare,
+             fg=P["success"]).pack(side="left", padx=4, pady=3)
+        _btn("⏹ Остановить",             self._hrl_stop_training,
+             fg=P["danger"], width=12).pack(side="left", padx=4, pady=3)
+        _btn("💾 Сохранить Q-таблицы",    self._hrl_save_qtables,
+             fg=P["text2"], width=18).pack(side="left", padx=4, pady=3)
+
+        # ── Прогресс-бар и статус ─────────────────────────────────────────
+        prog_frame = tk.Frame(inner, bg=P["panel"])
+        prog_frame.pack(fill="x", padx=6, pady=2)
+        self._hrl_status_var = tk.StringVar(value="Агенты не обучены")
+        tk.Label(prog_frame, textvariable=self._hrl_status_var,
+                 font=("Arial", 8), bg=P["panel"], fg=P["hi"]
+                 ).pack(side="left", padx=8)
+        self._hrl_progress = ttk.Progressbar(prog_frame, orient="horizontal",
+                                              length=300, mode="determinate")
+        self._hrl_progress.pack(side="left", padx=8, pady=3)
+        self._hrl_phase_var = tk.StringVar(value="")
+        tk.Label(prog_frame, textvariable=self._hrl_phase_var,
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"]
+                 ).pack(side="left", padx=4)
+
+        # ── Индикаторы текущих целей (отображаются при симуляции) ─────────
+        ind_frame = tk.Frame(inner, bg=P["panel"])
+        ind_frame.pack(fill="x", padx=6, pady=2)
+        tk.Label(ind_frame, text="Текущий режим (L3):",
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"]
+                 ).pack(side="left", padx=8)
+        self._hrl_mode_var = tk.StringVar(value="—")
+        tk.Label(ind_frame, textvariable=self._hrl_mode_var,
+                 font=("Arial", 9, "bold"), bg=P["panel"], fg=P["success"],
+                 width=22
+                 ).pack(side="left", padx=4)
+        tk.Label(ind_frame, text="Текущая цель (L2):",
+                 font=("Arial", 8), bg=P["panel"], fg=P["text2"]
+                 ).pack(side="left", padx=8)
+        self._hrl_goal_var = tk.StringVar(value="—")
+        tk.Label(ind_frame, textvariable=self._hrl_goal_var,
+                 font=("Arial", 9, "bold"), bg=P["panel"], fg=P["warn"],
+                 width=22
+                 ).pack(side="left", padx=4)
+
+        # ── Таблица сравнения ─────────────────────────────────────────────
+        tbl_frame = tk.LabelFrame(inner, text=" Результаты сравнения агентов ",
+                                  font=("Arial", 8, "bold"),
+                                  bg=P["panel"], fg=P["text2"], bd=1)
+        tbl_frame.pack(fill="x", padx=6, pady=4)
+        self._hrl_table_text = tk.Text(
+            tbl_frame, height=10, bg=P["canvas"], fg=P["text"],
+            font=("Consolas", 8), state="disabled", wrap="none",
+            bd=0, padx=6, pady=4)
+        self._hrl_table_text.pack(fill="x", padx=4, pady=4)
+        for tag, col in [("header", P["hi"]), ("sig", P["success"]),
+                          ("nosig", P["text2"]), ("good", P["success"]),
+                          ("bad", P["danger"])]:
+            self._hrl_table_text.tag_config(tag, foreground=col)
+
+        # ── Графики обучения ──────────────────────────────────────────────
+        chart_frame = tk.LabelFrame(inner, text=" Кривые обучения (сглаженные) ",
+                                    font=("Arial", 8, "bold"),
+                                    bg=P["panel"], fg=P["text2"], bd=1)
+        chart_frame.pack(fill="both", expand=True, padx=6, pady=4)
+
+        self._hrl_fig = Figure(figsize=(8, 3.2), facecolor=P["panel"])
+        self._hrl_canvas_widget = FigureCanvasTkAgg(self._hrl_fig, chart_frame)
+        self._hrl_canvas_widget.get_tk_widget().pack(fill="both", expand=True)
+        self._hrl_draw_empty_charts()
+
+    # ── HRL: вспомогательные методы GUI ──────────────────────────────────────
+
+    def _hrl_draw_empty_charts(self):
+        """Нарисовать пустые оси графиков обучения."""
+        fig = self._hrl_fig
+        fig.clear()
+        axes = fig.subplots(1, 3)
+        titles = ["Flat: кривая обучения", "Иерарх.: кривая обучения",
+                  "Сравнение метрик"]
+        for ax, title in zip(axes, titles):
+            ax.set_facecolor(P["canvas"])
+            ax.set_title(title, color=P["text2"], fontsize=7)
+            ax.tick_params(colors=P["text2"], labelsize=6)
+            for spine in ax.spines.values():
+                spine.set_edgecolor(P["grid"])
+            ax.set_xlabel("Эпизод", color=P["text2"], fontsize=6)
+            ax.set_ylabel("Награда", color=P["text2"], fontsize=6)
+            ax.text(0.5, 0.5, "Нет данных", transform=ax.transAxes,
+                    ha="center", va="center", color=P["text2"], fontsize=8)
+        fig.tight_layout(pad=1.0)
+        self._hrl_canvas_widget.draw()
+
+    def _hrl_get_config(self):
+        """Собрать HRLConfig из полей GUI."""
+        try:
+            from hrl_sim import HRLConfig, CurriculumPhase
+        except ImportError:
+            from .hrl_sim import HRLConfig, CurriculumPhase
+
+        v = self._hrl_vars
+        cfg = HRLConfig(
+            k3=int(v["hrl_k3"].get()),
+            k2=int(v["hrl_k2"].get()),
+            lambda_intrinsic=float(v["hrl_lambda"].get()),
+            soft_masking=bool(int(v["hrl_soft"].get())),
+            alpha_l3=float(v["hrl_al3"].get()),
+            alpha_l2=float(v["hrl_al2"].get()),
+            alpha_l1=float(v["hrl_al1"].get()),
+            gamma_l3=float(v["hrl_gl3"].get()),
+            gamma_l2=float(v["hrl_gl2"].get()),
+            gamma_l1=float(v["hrl_gl1"].get()),
+            epsilon_start=float(v["hrl_eps"].get()),
+            epsilon_decay=float(v["hrl_edc"].get()),
+            n_eval_episodes=int(v["hrl_neval"].get()),
+            curriculum=[
+                CurriculumPhase(int(v["hrl_cur1"].get()), ["serp"],
+                                "Базовая тактика (ранг 2)"),
+                CurriculumPhase(int(v["hrl_cur2"].get()), ["serp","tuapse"],
+                                "Обобщение (ранг 2+4)"),
+                CurriculumPhase(int(v["hrl_cur3"].get()), ["tuapse"],
+                                "Сложный сценарий (ранг 4)"),
+            ],
+        )
+        # Приоры целей (если заданы)
+        prior = {}
+        for gidx, var in self._hrl_prior_vars.items():
+            try:
+                w = float(var.get())
+                if w > 0:
+                    prior[gidx] = w
+            except ValueError:
+                pass
+        if prior:
+            cfg.goal_prior = prior
+        return cfg
+
+    def _hrl_train_flat(self):
+        """Обучить flat Q-learning агента с curriculum (в фоновом потоке)."""
+        import threading
+        self._hrl_stop[0] = False
+        v = self._hrl_vars
+        total_ep = int(v["hrl_flat_ep"].get())
+
+        def _run():
+            from tank_fire_sim import TankFireSim, SCENARIOS
+            rng = __import__("random").Random(42)
+            self._hrl_flat_sim = TankFireSim(seed=42, training=True,
+                                             scenario="tuapse")
+            # Flat обучение: curriculum вручную
+            phases = [
+                (max(1, total_ep//5),   ["serp"]),
+                (max(1, total_ep*3//10),["serp","tuapse"]),
+                (max(1, total_ep//2),   ["tuapse"]),
+            ]
+            done_ep = 0
+            total_flat = sum(p[0] for p in phases)
+            for ep_count, scenarios in phases:
+                for _ in range(ep_count):
+                    if self._hrl_stop[0]:
+                        break
+                    scen = rng.choice(scenarios)
+                    self._hrl_flat_sim.scenario = scen
+                    self._hrl_flat_sim._cfg     = SCENARIOS[scen]
+                    self._hrl_flat_sim.reset()
+                    steps = 0
+                    while (not self._hrl_flat_sim.extinguished
+                           and self._hrl_flat_sim.t < self._hrl_flat_sim._cfg["total_min"]
+                           and steps < 2000):
+                        self._hrl_flat_sim.step()
+                        steps += 1
+                    done_ep += 1
+                    pct = done_ep / total_flat * 100
+                    self.after(0, lambda p=pct, e=done_ep:
+                               self._hrl_update_progress(
+                                   p, f"Flat: эп. {e}/{total_flat}",
+                                   f"Flat Q-learning: ε={self._hrl_flat_sim.agent.epsilon:.3f}"))
+            self._hrl_flat_trained = True
+            self.after(0, lambda: self._hrl_status_var.set(
+                "Flat агент обучен ✓   Запустите иерарх. или нажмите «Сравнить»"))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _hrl_train_hier(self):
+        """Обучить иерархического агента с curriculum (в фоновом потоке)."""
+        import threading
+        self._hrl_stop[0] = False
+        cfg = self._hrl_get_config()
+        total_ep = cfg.total_train_episodes
+
+        def _run():
+            try:
+                from hrl_sim import HierarchicalTankFireSim
+            except ImportError:
+                from .hrl_sim import HierarchicalTankFireSim
+            self._hrl_sim = HierarchicalTankFireSim(
+                cfg=cfg, seed=42, scenario="tuapse")
+
+            def progress_cb(ep, total, phase_label, result):
+                pct = ep / total * 100
+                status = (f"Иерарх. RL: эп. {ep}/{total}  "
+                          f"ε={self._hrl_sim.l1.epsilon:.3f}  "
+                          f"{'✓' if result['extinguished'] else '✗'}")
+                self.after(0, lambda p=pct, s=status, ph=phase_label:
+                           self._hrl_update_progress(p, ph, s))
+
+            self._hrl_sim.train_curriculum(
+                progress_cb=progress_cb,
+                stop_flag=self._hrl_stop)
+
+            self._hrl_trained = True
+            rewards_l1 = self._hrl_sim.l1.episode_rewards
+            self.after(0, lambda: [
+                self._hrl_status_var.set(
+                    f"Иерарх. агент обучен ✓  L1: {len(rewards_l1)} эп.  "
+                    f"Покрытие: L1={self._hrl_sim.l1.coverage():.0%} "
+                    f"L2={self._hrl_sim.l2.coverage():.0%} "
+                    f"L3={self._hrl_sim.l3.coverage():.0%}"),
+                self._hrl_draw_learning_curves(),
+            ])
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _hrl_stop_training(self):
+        self._hrl_stop[0] = True
+        self._hrl_status_var.set("Обучение остановлено.")
+
+    def _hrl_update_progress(self, pct: float, phase: str, status: str):
+        self._hrl_progress["value"] = pct
+        self._hrl_phase_var.set(phase)
+        self._hrl_status_var.set(status)
+
+    def _hrl_compare(self):
+        """Запустить сравнительный эксперимент (в фоновом потоке)."""
+        import threading
+        if not self._hrl_flat_trained or not self._hrl_trained:
+            self._hrl_status_var.set(
+                "⚠ Сначала обучите оба агента (Flat и Иерархический)")
+            return
+
+        n_eval = int(self._hrl_vars["hrl_neval"].get())
+        self._hrl_status_var.set(f"Запуск {n_eval} оценочных прогонов…")
+
+        def _run():
+            try:
+                from hrl_metrics import run_full_comparison
+            except ImportError:
+                from .hrl_metrics import run_full_comparison
+            result = run_full_comparison(
+                self._hrl_flat_sim,
+                self._hrl_sim,
+                n_eval=n_eval,
+                alpha=0.05,
+            )
+            self._hrl_comparison = result
+            self.after(0, lambda: self._hrl_show_results(result))
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _hrl_show_results(self, result):
+        """Отобразить таблицу результатов и обновить графики."""
+        table = result.summary_table()
+        self._hrl_table_text.config(state="normal")
+        self._hrl_table_text.delete("1.0", "end")
+        # Заголовок
+        header_line = "  ".join(f"{c:<28}" for c in table[0]) + "\n"
+        self._hrl_table_text.insert("end", header_line, "header")
+        self._hrl_table_text.insert("end", "─" * 120 + "\n", "header")
+        for row in table[1:]:
+            sig = row[-1] == "✓"
+            delta_val = row[3]
+            is_positive = delta_val.startswith("+")
+            line = "  ".join(f"{c:<28}" for c in row) + "\n"
+            tag = "sig" if sig else "nosig"
+            self._hrl_table_text.insert("end", line, tag)
+        self._hrl_table_text.config(state="disabled")
+        self._hrl_status_var.set(
+            f"Сравнение завершено. Значимых различий: "
+            f"{sum(result.significant.values())}/{len(result.significant)}")
+        self._hrl_draw_comparison_charts(result)
+
+    def _hrl_draw_learning_curves(self):
+        """Нарисовать кривые обучения flat и иерархического агентов."""
+        try:
+            from hrl_metrics import smooth_rewards, convergence_episode
+        except ImportError:
+            from .hrl_metrics import smooth_rewards, convergence_episode
+
+        fig = self._hrl_fig
+        fig.clear()
+        axes = fig.subplots(1, 3)
+
+        colors = {"flat": P["info"], "hier": P["warn"]}
+
+        # Flat: кривая обучения
+        ax0 = axes[0]
+        ax0.set_facecolor(P["canvas"])
+        if hasattr(self, "_hrl_flat_sim") and self._hrl_flat_sim:
+            rw = self._hrl_flat_sim.agent.episode_rewards
+            if rw:
+                sm = smooth_rewards(rw, window=20)
+                x  = range(len(sm))
+                ax0.plot(x, sm, color=colors["flat"], linewidth=1.2)
+                ax0.fill_between(x, sm, alpha=0.15, color=colors["flat"])
+        ax0.set_title("Flat Q-learning", color=P["text2"], fontsize=7)
+        ax0.set_xlabel("Эпизод", color=P["text2"], fontsize=6)
+        ax0.set_ylabel("Награда (сглаж.)", color=P["text2"], fontsize=6)
+        ax0.tick_params(colors=P["text2"], labelsize=6)
+        for s in ax0.spines.values(): s.set_edgecolor(P["grid"])
+
+        # Hierarchical: кривые всех 3 уровней
+        ax1 = axes[1]
+        ax1.set_facecolor(P["canvas"])
+        if self._hrl_trained and self._hrl_sim:
+            for agent, label, color in [
+                (self._hrl_sim.l1, "L1 (НБТП)", P["warn"]),
+                (self._hrl_sim.l2, "L2 (РТП)", P["success"]),
+                (self._hrl_sim.l3, "L3 (НГ)", P["danger"]),
+            ]:
+                rw = agent.episode_rewards
+                if rw:
+                    sm = smooth_rewards(rw, window=max(5, len(rw)//50))
+                    ax1.plot(range(len(sm)), sm, label=label,
+                             color=color, linewidth=1.0)
+            ax1.legend(fontsize=6, facecolor=P["panel"], labelcolor=P["text"])
+        ax1.set_title("Иерархический RL (3 уровня)", color=P["text2"], fontsize=7)
+        ax1.set_xlabel("Эпизод", color=P["text2"], fontsize=6)
+        ax1.set_ylabel("Награда (сглаж.)", color=P["text2"], fontsize=6)
+        ax1.tick_params(colors=P["text2"], labelsize=6)
+        for s in ax1.spines.values(): s.set_edgecolor(P["grid"])
+
+        # Покрытие Q-таблицы
+        ax2 = axes[2]
+        ax2.set_facecolor(P["canvas"])
+        if self._hrl_trained and self._hrl_sim:
+            levels  = ["L3 (32×3)", "L2 (64×5)", "L1 (256×15)"]
+            covs    = [self._hrl_sim.l3.coverage(),
+                       self._hrl_sim.l2.coverage(),
+                       self._hrl_sim.l1.coverage()]
+            bar_c   = [P["danger"], P["warn"], P["info"]]
+            bars    = ax2.bar(levels, [c*100 for c in covs],
+                              color=bar_c, alpha=0.8)
+            for bar, cov in zip(bars, covs):
+                ax2.text(bar.get_x() + bar.get_width()/2,
+                         bar.get_height() + 1,
+                         f"{cov:.0%}", ha="center", fontsize=7,
+                         color=P["text"])
+            ax2.axhline(y=80, color=P["success"], linestyle="--",
+                        linewidth=0.8, alpha=0.7)
+            ax2.set_ylim(0, 105)
+        ax2.set_title("Покрытие Q-таблиц (%)", color=P["text2"], fontsize=7)
+        ax2.set_ylabel("%", color=P["text2"], fontsize=6)
+        ax2.tick_params(colors=P["text2"], labelsize=6)
+        for s in ax2.spines.values(): s.set_edgecolor(P["grid"])
+
+        fig.tight_layout(pad=1.0)
+        self._hrl_canvas_widget.draw()
+
+    def _hrl_draw_comparison_charts(self, result):
+        """Нарисовать сравнительные графики после эксперимента."""
+        try:
+            from hrl_metrics import EVAL_METRICS, METRIC_LABELS
+        except ImportError:
+            from .hrl_metrics import EVAL_METRICS, METRIC_LABELS
+
+        fig = self._hrl_fig
+        fig.clear()
+        axes = fig.subplots(1, 3)
+
+        metrics_show = ["success_rate", "total_reward", "fire_area_reduction"]
+
+        for ax, metric in zip(axes, metrics_show):
+            ax.set_facecolor(P["canvas"])
+            label = METRIC_LABELS.get(metric, metric)
+
+            fm = result.flat.mean.get(metric, 0)
+            hm = result.hier.mean.get(metric, 0)
+            fci = result.flat.ci95.get(metric, (fm, fm))
+            hci = result.hier.ci95.get(metric, (hm, hm))
+
+            x = [0, 1]
+            y = [fm, hm]
+            yerr_low  = [fm - fci[0], hm - hci[0]]
+            yerr_high = [fci[1] - fm, hci[1] - hm]
+            colors = [P["info"], P["warn"]]
+            bars = ax.bar(x, y, color=colors, alpha=0.8, width=0.4)
+            ax.errorbar(x, y,
+                        yerr=[yerr_low, yerr_high],
+                        fmt="none", color=P["text"], capsize=4, linewidth=1.2)
+
+            # Метка значимости
+            sig = result.significant.get(metric, False)
+            d   = result.cohens_d.get(metric, 0.0)
+            p   = result.mannwhitney_p.get(metric, 1.0)
+            top = max(fci[1], hci[1]) * 1.05
+            sig_text = f"{'*' if sig else 'ns'}  d={d:+.2f}  p={p:.3f}"
+            ax.text(0.5, top, sig_text, ha="center", fontsize=6,
+                    color=P["success"] if sig else P["text2"],
+                    transform=ax.get_xaxis_transform())
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(["Flat", "Hier"], fontsize=7, color=P["text"])
+            ax.set_title(label[:25], color=P["text2"], fontsize=7)
+            ax.tick_params(colors=P["text2"], labelsize=6)
+            for s in ax.spines.values(): s.set_edgecolor(P["grid"])
+
+        fig.tight_layout(pad=1.0)
+        self._hrl_canvas_widget.draw()
+
+    def _hrl_save_qtables(self):
+        """Сохранить Q-таблицы иерархического агента."""
+        if not self._hrl_trained or not self._hrl_sim:
+            self._hrl_status_var.set("⚠ Нет обученного иерарх. агента")
+            return
+        import os
+        path = os.path.join(os.path.dirname(__file__), "hrl_qtables.npz")
+        self._hrl_sim.save_qtables(path)
+        self._hrl_status_var.set(f"Q-таблицы сохранены → {path}")
 
     # ── Tab: Настройки ────────────────────────────────────────────────────────
     def _build_settings_tab(self, parent):
