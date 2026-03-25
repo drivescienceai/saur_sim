@@ -811,7 +811,7 @@ class TankFireApp(tk.Tk):
         self.sim       = TankFireSim(seed=42, training=True, scenario=self._scenario_key)
         self._running  = False
         self._after_id: Optional[str] = None
-        self._speed    = 15
+        self._speed    = 1
         self._anim_t   = 0          # animation counter for fire flicker
         self._snap: Optional[SimSnapshot] = None
 
@@ -2092,11 +2092,13 @@ class TankFireApp(tk.Tk):
                       padx=12, pady=6).pack(side="left", padx=4, pady=8)
 
         tk.Label(ctrl, text="│", bg=P["panel2"], fg=P["grid"]).pack(side="left")
+        tk.Label(ctrl, text="  Для обучения агента — вкладка «RL-агент»  |",
+                 bg=P["panel2"], fg=P["text2"], font=("Arial", 7)).pack(side="left", padx=4)
 
         # Скорость
         tk.Label(ctrl, text="Скорость:", bg=P["panel2"], fg=P["text"],
                  font=("Arial", 8)).pack(side="left", padx=(8,2))
-        self._speed_var = tk.StringVar(value="15×")
+        self._speed_var = tk.StringVar(value="1×")
         for label in self.SPEEDS:
             rb = tk.Radiobutton(ctrl, text=label, variable=self._speed_var, value=label,
                                 command=self._on_speed_change,
@@ -2130,24 +2132,24 @@ class TankFireApp(tk.Tk):
         # ── Фон — территория терминала ────────────────────────────────────────
         c.create_rectangle(0, 0, W, H, fill=P["canvas"], outline="")
         # Земля
-        c.create_rectangle(30, 20, W-10, H-50, fill="#0a1f0a", outline=P["grid"],
+        c.create_rectangle(30, 20, W-10, H-50, fill=P["ground"], outline=P["grid"],
                            width=1, dash=(4,4))
         # Надпись объекта
         c.create_text(W//2, 12, text="Резервуарный парк (сценарий симуляции)",
                       fill=P["text2"], font=("Arial", 7))
 
         # ── Открытый водоисточник (внизу) ────────────────────────────────────
-        c.create_rectangle(0, H-48, W, H, fill="#0a2a4a", outline="")
-        c.create_text(W//2, H-36, text="открытый водоисточник", fill=P["water"], font=("Arial", 8,"italic"))
+        c.create_rectangle(0, H-48, W, H, fill=P["river"], outline="")
+        c.create_text(W//2, H-36, text="открытый водоисточник", fill=P["text"], font=("Arial", 8,"italic"))
         c.create_text(W//2, H-22, text="↑ водоисточник для ПНС-110", fill=P["text2"], font=("Arial", 6))
         # Волны
         for wx in range(40, W-40, 30):
             c.create_arc(wx, H-44, wx+20, H-32, start=0, extent=180,
                          outline=P["water"], width=1, style="arc")
 
-        # ── Порт (глубоководный причал) ───────────────────────────────────────
-        c.create_rectangle(W-70, H-80, W-20, H-52, fill="#0d2244", outline=P["water"], width=1)
-        c.create_text(W-45, H-66, text="Причал\n(ПАНРК)", fill=P["water"],
+        # ── Причал (ПАНРК) ────────────────────────────────────────────────────
+        c.create_rectangle(W-70, H-80, W-20, H-52, fill=P["info"], outline=P["water"], width=1)
+        c.create_text(W-45, H-66, text="Причал\n(ПАНРК)", fill="white",
                       font=("Arial", 6), justify="center")
 
         # ── Дороги ────────────────────────────────────────────────────────────
@@ -2226,11 +2228,11 @@ class TankFireApp(tk.Tk):
             c.create_text(415, 295+8, text="🔥 горит", fill=P["danger"], font=("Arial", 6,"bold"))
 
         # Штаб (АШ)
-        c.create_rectangle(50, 195, 120, 235, fill="#2d2d5e", outline=P["hi"], width=2)
-        c.create_text(85, 215, text="ОШ (АШ)", fill=P["hi"], font=("Arial", 7,"bold"))
+        c.create_rectangle(50, 195, 120, 235, fill=P["strat"], outline=P["hi"], width=2)
+        c.create_text(85, 215, text="ОШ (АШ)", fill="white", font=("Arial", 7,"bold"))
 
         # ── Гидранты ─────────────────────────────────────────────────────────
-        for gx, gy, name in [(140, 330, "ПГ-106"), (195, 180, "ПГ-107"), (355, 140, "ПГ-108")]:
+        for gx, gy, name in [(140, 330, "ПГ-1"), (195, 180, "ПГ-2"), (355, 140, "ПГ-3")]:
             c.create_oval(gx-7, gy-7, gx+7, gy+7, fill=P["hydrant"], outline="white", width=1)
             c.create_text(gx, gy+14, text=name, fill=P["hydrant"], font=("Arial", 6))
 
@@ -2303,7 +2305,7 @@ class TankFireApp(tk.Tk):
         a = sim.last_action
         code, level, desc = ACTIONS[a]
         lc = LEVEL_C[level]
-        c.create_rectangle(30, H-110, W-30, H-75, fill="#0a0a1a", outline=lc, width=1)
+        c.create_rectangle(30, H-110, W-30, H-75, fill=P["panel"], outline=lc, width=1)
         c.create_text(W//2, H-100, text=f"Действие РТП: [{code}] {desc}",
                       fill=lc, font=("Arial", 7,"bold"))
         c.create_text(W//2, H-85, text=f"Уровень: {level} | Фаза: {sim.phase} | t={self._fmt_time(sim.t)}",
