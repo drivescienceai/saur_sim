@@ -338,8 +338,10 @@ class ScenarioEditorApp(tk.Toplevel):
         right.pack_propagate(False)
         self._build_right_panel(right)
 
-        # Нижняя строка
+        # Нижняя строка (_status_var создаётся здесь — должна быть до _set_tool)
         self._build_bottom_bar()
+        # Установить активный инструмент только после создания _status_var
+        self._set_tool(OBJ_RVS_FIRE)
 
     def _build_toolbar(self, parent):
         tb = tk.Frame(parent, bg=P["panel"], height=40)
@@ -358,8 +360,7 @@ class ScenarioEditorApp(tk.Toplevel):
             )
             btn.pack(side="left", padx=2, pady=4)
             self._tool_btns[tool_key] = btn
-
-        self._set_tool(OBJ_RVS_FIRE)
+        # _set_tool вызывается позже, в _build_ui, когда _status_var уже создан
 
         # Кнопки управления
         tk.Label(tb, text="│", bg=P["panel"], fg=P["grid"]).pack(side="left", padx=4)

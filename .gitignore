@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Generated reports and articles
+*.pdf
+*.docx
+*.json
+!requirements.json
+
+# Batch results
+batch_results_*.json
+article_data_*.json
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+venv/
+.venv/
