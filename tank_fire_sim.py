@@ -123,12 +123,6 @@ APP_MODES: Dict[str, tuple] = {
     "sppр":     ("🧭  РЕЖИМ СППР",      "#1a6da8", "#e3f0fb"),
     "research": ("🔬  ИССЛЕДОВАНИЕ RL",  "#1e8449", "#e8f8f0"),
 }
-# Индексы видимых вкладок для каждого режима (0=Настройки … 7=Отчёт)
-MODE_TABS: Dict[str, set] = {
-    "trainer":  {0, 1, 3, 7},
-    "sppр":     {0, 1, 3, 7},
-    "research": set(range(8)),
-}
 # Баллы тренажёра: насколько выбранное действие близко к оптимальному
 _T_PERFECT = 20   # точное совпадение с greedy-выбором агента
 _T_GOOD    = 10   # в top-3 по Q-значению
@@ -1242,11 +1236,20 @@ class TankFireApp(tk.Tk):
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Сменить режим…",
                               command=self._switch_mode)
-        file_menu.add_command(label="Загрузить сценарий из JSON…",
-                              command=self._load_scenario_from_json)
         file_menu.add_separator()
         file_menu.add_command(label="Выход", command=self._on_close)
         menubar.add_cascade(label="Файл", menu=file_menu)
+
+        # — Настройки —
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_command(label="Параметры симуляции…",
+                                  command=self._open_settings_window)
+        settings_menu.add_command(label="Загрузить сценарий из JSON…",
+                                  command=self._load_scenario_from_json)
+        settings_menu.add_separator()
+        settings_menu.add_command(label="Конструктор сценариев…",
+                                  command=self._open_scenario_editor)
+        menubar.add_cascade(label="Настройки", menu=settings_menu)
 
         # — Симуляция —
         sim_menu = tk.Menu(menubar, tearoff=0)
@@ -1255,50 +1258,28 @@ class TankFireApp(tk.Tk):
         sim_menu.add_command(label="⏭  Шаг",   command=self._on_step)
         sim_menu.add_command(label="⏮  Сброс", command=self._on_reset)
         sim_menu.add_separator()
-        sim_menu.add_command(label="Новый эпизод",      command=self._new_episode)
+        sim_menu.add_command(label="Новый эпизод", command=self._new_episode)
         menubar.add_cascade(label="Симуляция", menu=sim_menu)
 
         # — Генерация —
         gen_menu = tk.Menu(menubar, tearoff=0)
-        gen_menu.add_command(label="Отчёт PDF…",
-                             command=lambda: self._menu_go_tab(7))
-        gen_menu.add_command(label="Экспорт JSON…",
-                             command=lambda: self._menu_go_tab(7))
-        gen_menu.add_command(label="Экспорт DOCX…",
-                             command=lambda: self._menu_go_tab(7))
-        gen_menu.add_separator()
-        gen_menu.add_command(label="Мануал программы (PDF)…",
-                             command=lambda: self._menu_go_tab(7))
+        gen_menu.add_command(label="Отчёт / Экспорт…",
+                             command=self._open_report_window)
         menubar.add_cascade(label="Генерация", menu=gen_menu)
 
         # — Инструменты —
         tools_menu = tk.Menu(menubar, tearoff=0)
-        tools_menu.add_command(label="Конструктор сценариев…",
-                               command=self._open_scenario_editor)
         if self._mode == "research":
-            tools_menu.add_separator()
             tools_menu.add_command(label="Flat RL — обучение",
-                                   command=lambda: self._menu_go_tab(4))
+                                   command=lambda: self._menu_go_tab("rl"))
             tools_menu.add_command(label="Иерарх. RL — обучение",
-                                   command=lambda: self._menu_go_tab(5))
+                                   command=lambda: self._menu_go_tab("hrl"))
             tools_menu.add_command(label="Массовое моделирование",
-                                   command=lambda: self._menu_go_tab(6))
+                                   command=lambda: self._menu_go_tab("batch"))
+            tools_menu.add_separator()
+        tools_menu.add_command(label="Справочник действий РТП",
+                               command=lambda: self._menu_go_tab("ref"))
         menubar.add_cascade(label="Инструменты", menu=tools_menu)
-
-        # — Вид —
-        view_menu = tk.Menu(menubar, tearoff=0)
-        view_menu.add_command(label="Настройки",
-                              command=lambda: self._menu_go_tab(0))
-        view_menu.add_command(label="Хронология",
-                              command=lambda: self._menu_go_tab(1))
-        if self._mode == "research":
-            view_menu.add_command(label="Метрики",
-                                  command=lambda: self._menu_go_tab(2))
-        view_menu.add_command(label="Справочник РТП",
-                              command=lambda: self._menu_go_tab(3))
-        view_menu.add_command(label="Отчёт / Экспорт",
-                              command=lambda: self._menu_go_tab(7))
-        menubar.add_cascade(label="Вид", menu=view_menu)
 
         self.config(menu=menubar)
 
@@ -1453,7 +1434,7 @@ class TankFireApp(tk.Tk):
 
         return frm
 
-    # ── Правая панель: вкладки ────────────────────────────────────────────────
+    # ── Правая панель: операционные вкладки ──────────────────────────────────
     def _build_right(self, parent) -> tk.Frame:
         frm = tk.Frame(parent, bg=P["bg"])
 
@@ -1473,70 +1454,95 @@ class TankFireApp(tk.Tk):
                   background=[("selected", P["accent"])],
                   foreground=[("selected", "#000000")])
 
-        # ── Вкладки в строгом порядке шагов работы ──────────────────────────
-        # Шаг 1 — Настройки (конфигурация перед стартом)
-        t_cfg = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_cfg, text="⚙️  1. Настройки")
-        self._build_settings_tab(t_cfg)
+        # Реестр вкладок: ключ → индекс в notebook
+        self._tab_keys: Dict[str, int] = {}
 
-        # Шаг 2 — Хронология (журнал событий во время симуляции)
+        # ── Основные операционные вкладки (видны всегда) ─────────────────────
+        # Хронология — журнал событий в реальном времени
         t_log = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_log, text="📋  2. Хронология")
+        nb.add(t_log, text="  Хронология")
         self._build_timeline_tab(t_log)
+        self._tab_keys["timeline"] = nb.index("end") - 1
 
-        # Шаг 3 — Метрики (графики во время и после симуляции)
+        # Динамика — графики метрик (площадь, расход, риск, фаза)
         t_met = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_met, text="📊  3. Метрики")
+        nb.add(t_met, text="  Динамика")
         self._build_metrics_tab(t_met)
+        self._tab_keys["metrics"] = nb.index("end") - 1
 
-        # Шаг 4 — Справочник действий (таблица допустимых действий РТП)
+        # Справочник действий РТП
         t_ref = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_ref, text="📖  4. Справочник")
+        nb.add(t_ref, text="  Справочник")
         self._build_reference_tab(t_ref)
+        self._tab_keys["ref"] = nb.index("end") - 1
 
-        # Шаг 5 — Flat RL (обучение плоского Q-learning агента)
-        t_rl = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_rl, text="🤖  5. Flat RL")
-        self._build_rl_tab(t_rl)
+        # ── Вкладки исследовательского режима (скрыты в trainer/sppр) ────────
+        if self._mode == "research":
+            t_rl = tk.Frame(nb, bg=P["bg"])
+            nb.add(t_rl, text="  Flat RL")
+            self._build_rl_tab(t_rl)
+            self._tab_keys["rl"] = nb.index("end") - 1
 
-        # Шаг 6 — Иерархический RL (обучение 3-уровневого агента)
-        t_hrl = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_hrl, text="🏛  6. Иерарх. RL")
-        self._build_hrl_tab(t_hrl)
+            t_hrl = tk.Frame(nb, bg=P["bg"])
+            nb.add(t_hrl, text="  Иерарх. RL")
+            self._build_hrl_tab(t_hrl)
+            self._tab_keys["hrl"] = nb.index("end") - 1
 
-        # Шаг 7 — Массовое моделирование (сравнительный анализ N эпизодов)
-        t_bat = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_bat, text="🔬  7. Массовое")
-        self._build_batch_tab(t_bat)
-
-        # Шаг 8 — Отчёт / Экспорт (PDF, DOCX, JSON)
-        t_rep = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_rep, text="📄  8. Отчёт")
-        self._build_report_tab(t_rep)
+            t_bat = tk.Frame(nb, bg=P["bg"])
+            nb.add(t_bat, text="  Массовое")
+            self._build_batch_tab(t_bat)
+            self._tab_keys["batch"] = nb.index("end") - 1
 
         self._nb = nb
 
-        # Скрыть вкладки, не нужные в текущем режиме
-        visible = MODE_TABS.get(self._mode, set(range(8)))
-        for i in range(nb.index("end")):
-            if i not in visible:
-                nb.tab(i, state="hidden")
+        # ── Настройки и Отчёт строятся отложенно (для окон из меню) ──────────
+        self._settings_win = None
+        self._report_win   = None
 
-        # По умолчанию: в тренажёре/СППР открыта «Хронология», в research — «Настройки»
-        if self._mode in ("trainer", "sppр"):
-            nb.select(1)   # Хронология — основная рабочая вкладка
-        else:
-            nb.select(0)   # Настройки
+        # По умолчанию — Хронология
+        nb.select(self._tab_keys["timeline"])
 
         return frm
 
-    def _menu_go_tab(self, tab_idx: int):
-        """Переключить на вкладку по индексу (из меню). Показать, если скрыта."""
-        try:
-            self._nb.tab(tab_idx, state="normal")
-            self._nb.select(tab_idx)
-        except Exception:
-            pass
+    def _menu_go_tab(self, key: str):
+        """Переключить на вкладку по строковому ключу (из меню)."""
+        idx = self._tab_keys.get(key)
+        if idx is not None:
+            try:
+                self._nb.tab(idx, state="normal")
+                self._nb.select(idx)
+            except Exception:
+                pass
+
+    # ── Окно «Настройки» (открывается из меню) ──────────────────────────────
+    def _open_settings_window(self):
+        """Открыть настройки в отдельном окне."""
+        if self._settings_win and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            self._settings_win.focus_force()
+            return
+        win = tk.Toplevel(self)
+        win.title("Параметры симуляции")
+        win.geometry("600x700")
+        win.configure(bg=P["bg"])
+        win.resizable(True, True)
+        self._settings_win = win
+        self._build_settings_tab(win)
+
+    # ── Окно «Отчёт / Экспорт» (открывается из меню) ────────────────────────
+    def _open_report_window(self):
+        """Открыть генерацию отчётов в отдельном окне."""
+        if self._report_win and self._report_win.winfo_exists():
+            self._report_win.lift()
+            self._report_win.focus_force()
+            return
+        win = tk.Toplevel(self)
+        win.title("Генерация отчётов и экспорт")
+        win.geometry("650x600")
+        win.configure(bg=P["bg"])
+        win.resizable(True, True)
+        self._report_win = win
+        self._build_report_tab(win)
 
     # ── Tab: Хронология ──────────────────────────────────────────────────────
     def _build_timeline_tab(self, parent):
@@ -3767,32 +3773,33 @@ class TankFireApp(tk.Tk):
         tk.Label(bar, text=" Порядок работы:", bg=P["panel"], fg=P["text2"],
                  font=("Arial", 8, "bold")).pack(side="left", padx=(10, 4))
 
+        # (num, title, hint, action) — action: строковый ключ вкладки или callable
         _steps_by_mode = {
             "trainer": [
-                ("1", "Настройки",  "⚙ Выберите сценарий\nи параметры пожара",   0),
-                ("2", "Старт",      "▶ Нажмите «Пуск» и\nвыбирайте действия",    1),
-                ("3", "Справочник", "📖 Допустимые действия\nпо фазам пожара",    3),
-                ("4", "Дебрифинг",  "По итогам — разбор\nкаждого решения",       7),
+                ("1", "Настройки",  "⚙ Меню → Настройки →\nПараметры симуляции",    self._open_settings_window),
+                ("2", "Старт",      "▶ Нажмите «Пуск» и\nвыбирайте действия",       "timeline"),
+                ("3", "Справочник", "📖 Допустимые действия\nпо фазам пожара",       "ref"),
+                ("4", "Дебрифинг",  "Меню → Генерация →\nОтчёт / Экспорт",          self._open_report_window),
             ],
             "sppр": [
-                ("1", "Настройки",  "⚙ Сценарий, параметры\nагента",             0),
-                ("2", "Старт",      "▶ Пуск → агент\nдаёт рекомендации",         1),
-                ("3", "Справочник", "📖 Справочник действий\nРТП по фазам",       3),
-                ("4", "Отчёт",      "📄 Журнал отклонений\nот рекомендаций",     7),
+                ("1", "Настройки",  "⚙ Меню → Настройки →\nПараметры симуляции",    self._open_settings_window),
+                ("2", "Старт",      "▶ Пуск → агент\nдаёт рекомендации",            "timeline"),
+                ("3", "Справочник", "📖 Справочник действий\nРТП по фазам",          "ref"),
+                ("4", "Отчёт",      "Меню → Генерация →\nОтчёт / Экспорт",          self._open_report_window),
             ],
             "research": [
-                ("1", "Настройки",  "⚙ Сценарий, параметры\nпожара и RL-агента", 0),
-                ("2", "Симуляция",  "▶ Пуск → Хронология\nи Метрики",           1),
-                ("3", "Flat RL",    "Обучить плоский\nQ-learning агент",          4),
-                ("4", "Иерарх. RL", "Обучить 3-уровневый\nагент L3→L2→L1",       5),
-                ("5", "Массовое",   "N симуляций: Flat vs\nHRL + CI/p-value",     6),
-                ("6", "Отчёт",      "PDF / DOCX / JSON\nс выводами и графиками",  7),
+                ("1", "Настройки",  "⚙ Меню → Настройки →\nПараметры симуляции",    self._open_settings_window),
+                ("2", "Симуляция",  "▶ Пуск → Хронология\nи Динамика",              "timeline"),
+                ("3", "Flat RL",    "Обучить плоский\nQ-learning агент",              "rl"),
+                ("4", "Иерарх. RL", "Обучить 3-уровневый\nагент L3→L2→L1",           "hrl"),
+                ("5", "Массовое",   "N симуляций: Flat vs\nHRL + CI/p-value",         "batch"),
+                ("6", "Отчёт",      "Меню → Генерация →\nОтчёт / Экспорт",          self._open_report_window),
             ],
         }
         steps = _steps_by_mode.get(self._mode, _steps_by_mode["research"])
 
         arrow_lbl = "→"
-        for idx, (num, title, hint, tab_idx) in enumerate(steps):
+        for idx, (num, title, hint, action) in enumerate(steps):
             # Стрелка-разделитель
             if idx > 0:
                 tk.Label(bar, text=arrow_lbl, bg=P["panel"], fg=P["grid"],
@@ -3816,18 +3823,17 @@ class TankFireApp(tk.Tk):
                                 fg=P["text"], font=("Arial", 8))
             text_lbl.pack(side="left", padx=2)
 
-            # Tooltip и переключение на вкладку при клике
-            _tab_idx = tab_idx
-            def _make_click(ti):
+            # Tooltip и переключение на вкладку / вызов команды при клике
+            def _make_click(act):
                 def _click(e):
-                    try:
-                        self._nb.select(ti)
-                    except Exception:
-                        pass
+                    if callable(act):
+                        act()
+                    elif isinstance(act, str):
+                        self._menu_go_tab(act)
                 return _click
 
             for w in (step_frame, inner, num_lbl, text_lbl):
-                w.bind("<Button-1>", _make_click(_tab_idx))
+                w.bind("<Button-1>", _make_click(action))
                 # Простая всплывающая подсказка
                 w.bind("<Enter>", lambda e, h=hint, w=w: self._show_tip(e, h, w))
                 w.bind("<Leave>", lambda e: self._hide_tip())
