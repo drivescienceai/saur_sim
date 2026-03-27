@@ -317,6 +317,7 @@ SCENARIOS: Dict[str, dict] = {
         "roof_obstruction_init": 0.70,
         "foam_intensity":    0.065,      # ГОСТ Р 51043-2002
         "tl_lookup":         _TL_LOOKUP,
+        "timeline":          TIMELINE,
         "scripted_effects":  _SCRIPTED_EFFECTS_TUAPSE,
         "actions_by_phase":  None,       # ACTIONS_BY_PHASE используется глобально
     },
@@ -332,6 +333,7 @@ SCENARIOS: Dict[str, dict] = {
         "roof_obstruction_init": 0.0,   # нет плавающей крыши (конусная кровля)
         "foam_intensity":    0.05,       # ПТП / Справочник РТП, стр. 104
         "tl_lookup":         _TL_SERP_LOOKUP,
+        "timeline":          TIMELINE_SERP,
         "scripted_effects":  _SCRIPTED_EFFECTS_SERP,
         "actions_by_phase":  ACTIONS_BY_PHASE_SERP,
     },
@@ -1235,12 +1237,69 @@ class TankFireApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # ── Меню ──────────────────────────────────────────────────────────────
         menubar = tk.Menu(self)
+
+        # — Файл —
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Сменить режим…",
                               command=self._switch_mode)
+        file_menu.add_command(label="Загрузить сценарий из JSON…",
+                              command=self._load_scenario_from_json)
         file_menu.add_separator()
         file_menu.add_command(label="Выход", command=self._on_close)
         menubar.add_cascade(label="Файл", menu=file_menu)
+
+        # — Симуляция —
+        sim_menu = tk.Menu(menubar, tearoff=0)
+        sim_menu.add_command(label="▶  Пуск",  command=self._on_play)
+        sim_menu.add_command(label="⏸  Стоп",  command=self._on_pause)
+        sim_menu.add_command(label="⏭  Шаг",   command=self._on_step)
+        sim_menu.add_command(label="⏮  Сброс", command=self._on_reset)
+        sim_menu.add_separator()
+        sim_menu.add_command(label="Новый эпизод",      command=self._new_episode)
+        menubar.add_cascade(label="Симуляция", menu=sim_menu)
+
+        # — Генерация —
+        gen_menu = tk.Menu(menubar, tearoff=0)
+        gen_menu.add_command(label="Отчёт PDF…",
+                             command=lambda: self._menu_go_tab(7))
+        gen_menu.add_command(label="Экспорт JSON…",
+                             command=lambda: self._menu_go_tab(7))
+        gen_menu.add_command(label="Экспорт DOCX…",
+                             command=lambda: self._menu_go_tab(7))
+        gen_menu.add_separator()
+        gen_menu.add_command(label="Мануал программы (PDF)…",
+                             command=lambda: self._menu_go_tab(7))
+        menubar.add_cascade(label="Генерация", menu=gen_menu)
+
+        # — Инструменты —
+        tools_menu = tk.Menu(menubar, tearoff=0)
+        tools_menu.add_command(label="Конструктор сценариев…",
+                               command=self._open_scenario_editor)
+        if self._mode == "research":
+            tools_menu.add_separator()
+            tools_menu.add_command(label="Flat RL — обучение",
+                                   command=lambda: self._menu_go_tab(4))
+            tools_menu.add_command(label="Иерарх. RL — обучение",
+                                   command=lambda: self._menu_go_tab(5))
+            tools_menu.add_command(label="Массовое моделирование",
+                                   command=lambda: self._menu_go_tab(6))
+        menubar.add_cascade(label="Инструменты", menu=tools_menu)
+
+        # — Вид —
+        view_menu = tk.Menu(menubar, tearoff=0)
+        view_menu.add_command(label="Настройки",
+                              command=lambda: self._menu_go_tab(0))
+        view_menu.add_command(label="Хронология",
+                              command=lambda: self._menu_go_tab(1))
+        if self._mode == "research":
+            view_menu.add_command(label="Метрики",
+                                  command=lambda: self._menu_go_tab(2))
+        view_menu.add_command(label="Справочник РТП",
+                              command=lambda: self._menu_go_tab(3))
+        view_menu.add_command(label="Отчёт / Экспорт",
+                              command=lambda: self._menu_go_tab(7))
+        menubar.add_cascade(label="Вид", menu=view_menu)
+
         self.config(menu=menubar)
 
         # ── Полоса режима (цветная, под заголовком) ───────────────────────────
@@ -1463,10 +1522,21 @@ class TankFireApp(tk.Tk):
             if i not in visible:
                 nb.tab(i, state="hidden")
 
-        # По умолчанию всегда открыта вкладка «Настройки» (шаг 1)
-        nb.select(0)
+        # По умолчанию: в тренажёре/СППР открыта «Хронология», в research — «Настройки»
+        if self._mode in ("trainer", "sppр"):
+            nb.select(1)   # Хронология — основная рабочая вкладка
+        else:
+            nb.select(0)   # Настройки
 
         return frm
+
+    def _menu_go_tab(self, tab_idx: int):
+        """Переключить на вкладку по индексу (из меню). Показать, если скрыта."""
+        try:
+            self._nb.tab(tab_idx, state="normal")
+            self._nb.select(tab_idx)
+        except Exception:
+            pass
 
     # ── Tab: Хронология ──────────────────────────────────────────────────────
     def _build_timeline_tab(self, parent):
@@ -1475,7 +1545,7 @@ class TankFireApp(tk.Tk):
         tk.Label(hdr, text="Журнал событий симуляции",
                  font=("Arial", 9, "bold"), bg=P["panel2"], fg=P["hi"]
                  ).pack(side="left", padx=8, pady=4)
-        tk.Label(hdr, text="(Жирным — текущие события симуляции)",
+        tk.Label(hdr, text="(События появляются по ходу симуляции)",
                  font=("Arial", 8), bg=P["panel2"], fg=P["text2"]
                  ).pack(side="left")
 
@@ -1500,18 +1570,56 @@ class TankFireApp(tk.Tk):
             self._log_text.tag_config(color_key, foreground=color_val)
         self._log_text.tag_config("bold", font=("Consolas", 8, "bold"))
 
-        # Наполнить хронологией из PDF
+        # Счётчик отображённых событий (для инкрементального обновления)
+        self._tl_shown_count = 0
+
+        # Показать заглушку до запуска симуляции
         self._log_text.config(state="normal")
         self._log_text.insert("end", "═"*68 + "\n", "neutral")
-        self._log_text.insert("end", " ХРОНОЛОГИЯ СОБЫТИЙ СИМУЛЯЦИИ\n", "hi")
+        scen_name = SCENARIOS.get(self._scenario_key, {}).get("name", "")
+        self._log_text.insert("end", f" ХРОНОЛОГИЯ: {scen_name}\n", "hi")
         self._log_text.insert("end", "═"*68 + "\n\n", "neutral")
-        for t_ev, time_lbl, desc, color in TIMELINE:
-            tag = "warn" if color == P["warn"] else \
-                  "danger" if color == P["danger"] else \
-                  "success" if color == P["success"] else "info"
-            date_str = f"[{time_lbl}]"
-            self._log_text.insert("end", f"{date_str:18s} ", "neutral")
-            self._log_text.insert("end", f"{desc}\n", tag)
+        self._log_text.insert("end",
+            "  Нажмите ▶ Пуск для запуска симуляции.\n"
+            "  События будут появляться здесь по ходу моделирования.\n", "neutral")
+        self._log_text.config(state="disabled")
+
+    def _refresh_timeline(self):
+        """Сбросить и обновить заголовок хронологии при смене сценария."""
+        self._tl_shown_count = 0
+        self._log_text.config(state="normal")
+        self._log_text.delete("1.0", "end")
+        self._log_text.insert("end", "═"*68 + "\n", "neutral")
+        scen_name = SCENARIOS.get(self._scenario_key, {}).get("name", "")
+        self._log_text.insert("end", f" ХРОНОЛОГИЯ: {scen_name}\n", "hi")
+        self._log_text.insert("end", "═"*68 + "\n\n", "neutral")
+        self._log_text.insert("end",
+            "  Нажмите ▶ Пуск для запуска симуляции.\n"
+            "  События будут появляться здесь по ходу моделирования.\n", "neutral")
+        self._log_text.config(state="disabled")
+
+    def _update_timeline_live(self):
+        """Добавить новые события из sim.events в хронологию (инкрементально)."""
+        events = self.sim.events
+        if len(events) <= self._tl_shown_count:
+            return
+        self._log_text.config(state="normal")
+        # При первом событии — убрать заглушку
+        if self._tl_shown_count == 0:
+            self._log_text.delete("1.0", "end")
+            self._log_text.insert("end", "═"*68 + "\n", "neutral")
+            scen_name = SCENARIOS.get(self._scenario_key, {}).get("name", "")
+            self._log_text.insert("end", f" ХРОНОЛОГИЯ: {scen_name}\n", "hi")
+            self._log_text.insert("end", "═"*68 + "\n\n", "neutral")
+        for i in range(self._tl_shown_count, len(events)):
+            t_val, color, text = events[i]
+            tag = ("warn" if color == P["warn"] else
+                   "danger" if color == P["danger"] else
+                   "success" if color == P["success"] else "info")
+            time_str = self._fmt_time(t_val)
+            self._log_text.insert("end", f"[{time_str}]  ", "neutral")
+            self._log_text.insert("end", f"{text}\n", tag)
+        self._tl_shown_count = len(events)
         self._log_text.config(state="disabled")
         self._log_text.see("end")
 
@@ -3547,6 +3655,7 @@ class TankFireApp(tk.Tk):
         self.sim._cfg = cfg
         self.sim.scenario = "custom"
         self.sim.reset()
+        self._refresh_timeline()
         self._draw_map()
         self._update_charts()
         self._update_status()
@@ -3565,6 +3674,7 @@ class TankFireApp(tk.Tk):
             self.sim = TankFireSim(seed=42, training=True, scenario=new_scenario)
             self._hdr_var.set(SCENARIOS[new_scenario]["name"])
             self._norms_label_var.set(self._get_norms_text())
+            self._refresh_timeline()
             self._draw_map()
             self._update_charts()
             self._update_status()
@@ -3640,11 +3750,12 @@ class TankFireApp(tk.Tk):
         # Прогресс-бар
         tk.Label(ctrl, text="Прогресс:", bg=P["panel2"], fg=P["text"],
                  font=("Arial", 8)).pack(side="left")
-        self._prog_var = tk.StringVar(value="0 / 4862 мин  (0%)")
+        _total = SCENARIOS.get(self._scenario_key, {}).get("total_min", TOTAL_MIN)
+        self._prog_var = tk.StringVar(value=f"0 / {_total} мин  (0%)")
         tk.Label(ctrl, textvariable=self._prog_var, bg=P["panel2"], fg=P["hi"],
                  font=("Consolas", 8), width=28).pack(side="left", padx=4)
         self._prog_bar = ttk.Progressbar(ctrl, length=200, mode="determinate",
-                                         maximum=TOTAL_MIN)
+                                         maximum=_total)
         self._prog_bar.pack(side="left", padx=4)
 
     def _build_workflow_guide(self):
@@ -4866,8 +4977,9 @@ class TankFireApp(tk.Tk):
         self._prog_bar["value"] = sim.t
 
     def _log_sim_event(self, t: int, color: str, text: str):
-        """Добавить запись в журнал хронологии."""
-        pass  # события уже в sim.events, отображаются при необходимости
+        """Добавить запись в журнал хронологии (через sim.events)."""
+        self.sim.events.append((t, color, text))
+        self._update_timeline_live()
 
     @staticmethod
     def _fmt_time(t: int) -> str:
@@ -4926,6 +5038,7 @@ class TankFireApp(tk.Tk):
         self._anim_t += 1
         self._draw_map()
         self._update_status()
+        self._update_timeline_live()
 
         # Обновить панель рекомендации СППР
         if self._mode == "sppр":
@@ -4968,6 +5081,7 @@ class TankFireApp(tk.Tk):
         self._anim_t += 1
         self._draw_map()
         self._update_status()
+        self._update_timeline_live()
         self._update_charts()
 
     def _on_reset(self):
@@ -4985,6 +5099,7 @@ class TankFireApp(tk.Tk):
         elif self._mode == "sppр":
             self._sppр_update_rec()
         self._anim_t = 0
+        self._refresh_timeline()
         self._draw_map()
         self._update_status()
         self._update_charts()
