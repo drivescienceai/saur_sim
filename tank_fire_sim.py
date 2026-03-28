@@ -1060,98 +1060,93 @@ class ModeSelectDialog(tk.Tk):
         self.resizable(False, False)
         self._selected: Optional[str] = None
         self._build()
-        # Центрировать на экране
+        # Центрировать на экране (с ограничением по высоте)
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
+        # Если не помещается — ограничить и разрешить прокрутку
+        if h > sh - 80:
+            h = sh - 80
+        self.geometry(f"{w}x{h}+{max(0,(sw-w)//2)}+{max(0,(sh-h)//2)}")
 
     def _build(self):
         BG, HDR, TXT, TXT2 = self._BG, self._HDR_BG, self._TEXT, self._TEXT2
 
-        # ── Заголовок ────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=HDR, pady=16)
+        # ── Заголовок (компактный) ───────────────────────────────────────────
+        hdr = tk.Frame(self, bg=HDR, pady=8)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="САУР-ПСП",
-                 font=("Arial", 20, "bold"),
+        tk.Label(hdr, text="САУР-ПСП  —  Выбор режима работы",
+                 font=("Arial", 14, "bold"),
                  bg=HDR, fg="#c0392b").pack()
         tk.Label(hdr,
-                 text="Система адаптивного управления реагированием\nпожарно-спасательного подразделения",
-                 font=("Arial", 9), bg=HDR, fg=TXT2, justify="center").pack()
-        tk.Label(hdr, text="Выберите режим работы:",
-                 font=("Arial", 11, "bold"),
-                 bg=HDR, fg=TXT).pack(pady=(10, 0))
+                 text="Система адаптивного управления реагированием пожарно-спасательного подразделения",
+                 font=("Arial", 8), bg=HDR, fg=TXT2).pack()
 
-        # ── Группы режимов ───────────────────────────────────────────────────
+        # ── Группы режимов: сетка 2×2 ───────────────────────────────────────
         body = tk.Frame(self, bg=BG)
-        body.pack(padx=12, pady=6)
+        body.pack(fill="both", expand=True, padx=8, pady=4)
 
-        for group_name, group_color, modes in self._GROUPS:
+        for gi, (group_name, group_color, modes) in enumerate(self._GROUPS):
+            r, c = divmod(gi, 2)
             grp = tk.LabelFrame(body, text=f"  {group_name}  ",
                                 bg=BG, fg=group_color,
-                                font=("Arial", 9, "bold"),
+                                font=("Arial", 8, "bold"),
                                 bd=1, relief="groove",
                                 labelanchor="nw")
-            grp.pack(fill="x", padx=4, pady=3)
+            grp.grid(row=r, column=c, padx=3, pady=2, sticky="nsew")
             row = tk.Frame(grp, bg=BG)
-            row.pack(padx=4, pady=4)
+            row.pack(padx=2, pady=2)
             for mode_key, icon, title, accent, desc, features in modes:
                 self._make_card(row, mode_key, icon, title, accent, desc, features)
 
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+        body.rowconfigure(1, weight=1)
+
         # ── Подвал ───────────────────────────────────────────────────────────
-        footer = tk.Frame(self, bg=self._BG2, pady=6)
+        footer = tk.Frame(self, bg=self._BG2, pady=4)
         footer.pack(fill="x")
         tk.Label(footer,
-                 text="Сменить режим: меню Файл → Сменить режим  |  ГОСТ Р 51043-2002 / СП 155.13130.2014",
-                 font=("Arial", 8), bg=self._BG2, fg=self._TEXT2).pack()
+                 text="Сменить режим: Файл → Сменить режим  |  ГОСТ Р 51043-2002",
+                 font=("Arial", 7), bg=self._BG2, fg=self._TEXT2).pack()
 
     def _make_card(self, parent, mode_key, icon, title, accent, desc, features):
-        """Одна карточка режима (светлая тема) с hover-эффектом."""
+        """Компактная карточка режима (светлая тема) с hover-эффектом."""
         BG_N = self._CARD_BG
         BG_H = self._CARD_HV
 
         outer = tk.Frame(parent, bg=self._BORDER, bd=0)
-        outer.pack(side="left", padx=5, pady=3)
+        outer.pack(side="left", padx=3, pady=2)
 
-        card = tk.Frame(outer, bg=BG_N, cursor="hand2", padx=12, pady=10, bd=0)
+        card = tk.Frame(outer, bg=BG_N, cursor="hand2", padx=8, pady=6, bd=0)
         card.pack(padx=1, pady=1)
 
-        # Иконка
-        tk.Label(card, text=icon, font=("Arial", 24), bg=BG_N, fg=accent).pack()
+        # Иконка + заголовок в одну строку
+        top = tk.Frame(card, bg=BG_N)
+        top.pack()
+        tk.Label(top, text=icon, font=("Arial", 16), bg=BG_N, fg=accent
+                 ).pack(side="left", padx=(0, 4))
+        tk.Label(top, text=title.replace("\n", " "), font=("Arial", 9, "bold"),
+                 bg=BG_N, fg=self._TEXT, justify="left").pack(side="left")
 
-        # Заголовок
-        tk.Label(card, text=title, font=("Arial", 10, "bold"),
-                 bg=BG_N, fg=self._TEXT, justify="center").pack(pady=(2, 0))
-
-        # Описание
-        tk.Label(card, text=desc, font=("Arial", 8), bg=BG_N,
-                 fg=self._TEXT2, justify="center", wraplength=180).pack(pady=(4, 4))
-
-        # Список возможностей
-        feats_frame = tk.Frame(card, bg=BG_N)
-        feats_frame.pack(anchor="w", fill="x")
-        for feat in features:
-            row = tk.Frame(feats_frame, bg=BG_N)
-            row.pack(fill="x", pady=0)
-            tk.Label(row, text="·", font=("Arial", 8, "bold"),
-                     bg=BG_N, fg=accent).pack(side="left")
-            tk.Label(row, text=f" {feat}", font=("Arial", 7),
-                     bg=BG_N, fg=self._TEXT2).pack(side="left")
+        # Описание (компактное)
+        tk.Label(card, text=desc, font=("Arial", 7), bg=BG_N,
+                 fg=self._TEXT2, justify="center", wraplength=160).pack(pady=(2, 2))
 
         # Кнопка выбора
         btn = tk.Button(
-            card,
-            text="  Выбрать  ",
-            font=("Arial", 9, "bold"),
+            card, text="Выбрать",
+            font=("Arial", 8, "bold"),
             bg=accent, fg="white",
             activebackground=accent, activeforeground="white",
-            relief="flat", padx=12, pady=4,
+            relief="flat", padx=10, pady=2,
             cursor="hand2",
             command=lambda k=mode_key: self._select(k),
         )
-        btn.pack(pady=(8, 0), fill="x")
+        btn.pack(pady=(2, 0), fill="x")
 
-        # Hover эффекты (рекурсивный обход дочерних виджетов)
+        # Hover-эффект
         def _set_bg(widget, bg):
             try:
                 widget.config(bg=bg)
