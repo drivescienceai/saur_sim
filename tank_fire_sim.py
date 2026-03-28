@@ -991,7 +991,7 @@ class ModeSelectDialog(tk.Tk):
              "Курсант принимает решения\nсистема оценивает баллами",
              ["Выбор действия из кнопок",
               "Оценка: +20 / +10 / +2 / −5",
-              "PDF-дебрифинг по итогам"]),
+              "Разбор ошибок по итогам"]),
             ("sppр", "🧭", "СППР",
              "#1a6da8",
              "Агент рекомендует действие\nоператор принимает/отклоняет",
@@ -1243,6 +1243,41 @@ class TankFireApp(tk.Tk):
 
         # ── Состояние клонирования поведения ─────────────────────────────────
         self._bc_dataset: list = []  # [{"s": state_idx, "a": action_idx, "phase": str}]
+
+        # ── Ранний импорт генераторов отчётов (до построения UI) ───────────
+        try:
+            from .report_generator import (generate_comprehensive_report,
+                                            generate_trainer_report,
+                                            generate_sppр_report,
+                                            export_for_article_json,
+                                            export_for_article_docx)
+            from .manual_generator import generate_manual
+        except ImportError:
+            try:
+                from report_generator import (generate_comprehensive_report,
+                                              generate_trainer_report,
+                                              generate_sppр_report,
+                                              export_for_article_json,
+                                              export_for_article_docx)
+                from manual_generator import generate_manual
+            except ImportError:
+                generate_comprehensive_report = None
+                generate_trainer_report = None
+                generate_sppр_report = None
+                export_for_article_json = None
+                export_for_article_docx = None
+                generate_manual = None
+
+        self._gen_pdf         = generate_comprehensive_report
+        self._gen_pdf_trainer = generate_trainer_report
+        self._gen_pdf_sppр    = generate_sppр_report
+        self._gen_json        = export_for_article_json
+        self._gen_docx        = export_for_article_docx
+        self._gen_manual      = generate_manual
+        self._pdf_path    = ""
+        self._json_path   = ""
+        self._docx_path   = ""
+        self._manual_path = ""
 
         self._build_ui()
         self._draw_map()
@@ -1980,33 +2015,7 @@ class TankFireApp(tk.Tk):
     # ── Tab: Отчёт / Экспорт ─────────────────────────────────────────────────
     def _build_report_tab(self, parent):
         """Вкладка для генерации отчётов и экспорта данных по итогам симуляции."""
-        # Импорт модулей отчётности (отложенный, чтобы не замедлять запуск)
-        try:
-            from .report_generator import (generate_comprehensive_report,
-                                            generate_trainer_report,
-                                            generate_sppр_report,
-                                            export_for_article_json,
-                                            export_for_article_docx)
-            from .manual_generator import generate_manual
-        except ImportError:
-            from report_generator import (generate_comprehensive_report,
-                                          generate_trainer_report,
-                                          generate_sppр_report,
-                                          export_for_article_json,
-                                          export_for_article_docx)
-            from manual_generator import generate_manual
-
-        self._gen_pdf         = generate_comprehensive_report
-        self._gen_pdf_trainer = generate_trainer_report
-        self._gen_pdf_sppр    = generate_sppр_report
-        self._gen_json   = export_for_article_json
-        self._gen_docx   = export_for_article_docx
-        self._gen_manual = generate_manual
-
-        self._pdf_path    = ""
-        self._json_path   = ""
-        self._docx_path   = ""
-        self._manual_path = ""
+        # Генераторы уже импортированы в __init__
 
         # Заголовок
         hdr = tk.Frame(parent, bg=P["panel2"])
@@ -2127,7 +2136,7 @@ class TankFireApp(tk.Tk):
             f"Пенных атак:      {sim.foam_attacks}  |  АКП-50: {'Да' if sim.akp50_available else 'Нет'}",
             f"Расход ОВ:        {sim.water_flow:.0f} л/с  |  ПНС: {sim.n_pns}  |  БУ: {sim.n_bu}",
             f"Индекс риска:     {risk:.3f}  ({('КРИТИЧЕСКИЙ' if risk>0.75 else 'ВЫСОКИЙ' if risk>0.5 else 'СРЕДНИЙ' if risk>0.25 else 'НИЗКИЙ')})",
-            f"RL ε:             {sim.agent.epsilon:.3f}  |  Шагов: {len(sim.h_reward)}  |  Σ reward: {sum(sim.h_reward):.1f}",
+            f"Агент ε:          {sim.agent.epsilon:.3f}  |  Шагов: {len(sim.h_reward)}  |  Σ награда: {sum(sim.h_reward):.1f}",
         ]
         self._report_summary_var.set("\n".join(lines))
 
@@ -2280,7 +2289,7 @@ class TankFireApp(tk.Tk):
         # ── Заголовок ─────────────────────────────────────────────────────
         hdr = tk.Frame(inner, bg=P["panel2"])
         hdr.pack(fill="x", padx=6, pady=(6, 2))
-        tk.Label(hdr, text="🏛  3-УРОВНЕВЫЙ ИЕРАРХИЧЕСКИЙ Q-LEARNING",
+        tk.Label(hdr, text="🏛  3-УРОВНЕВОЕ ИЕРАРХИЧЕСКОЕ ОБУЧЕНИЕ С ПОДКРЕПЛЕНИЕМ",
                  font=("Arial", 10, "bold"), bg=P["panel2"], fg=P["hi"]
                  ).pack(side="left", padx=8, pady=5)
         tk.Label(hdr, text="L3: НГ/ГУ МЧС → L2: РТП/НШ → L1: НБТП/командир",
@@ -3548,30 +3557,30 @@ class TankFireApp(tk.Tk):
             "   b) Нажмите ▶ (Play) на нижней панели управления.\n"
             "   c) Наблюдайте за картой, метриками и журналом событий.\n"
             "   d) Нажмите ⏸ для паузы, ↺ для сброса эпизода.\n\n"
-            "2. ОБУЧЕНИЕ FLAT Q-LEARNING АГЕНТА\n"
-            "   a) Откройте вкладку «RL-агент».\n"
+            "2. ОБУЧЕНИЕ ТАБЛИЧНОГО АГЕНТА\n"
+            "   a) Откройте вкладку «Табличное ОП».\n"
             "   b) Введите число эпизодов (рекомендуется 500–2000).\n"
             "   c) Нажмите «▶ Запустить обучение»; прогресс отображается полосой.\n"
             "   d) После обучения на графиках появятся Q-значения и кривая наград.\n\n"
-            "3. ОБУЧЕНИЕ ИЕРАРХИЧЕСКОГО RL (3 уровня)\n"
-            "   a) Откройте вкладку «Иерархический RL».\n"
+            "3. ОБУЧЕНИЕ ИЕРАРХИЧЕСКОГО АГЕНТА (3 уровня)\n"
+            "   a) Откройте вкладку «Иерархическое ОП».\n"
             "   b) Настройте параметры k2/k3, α, γ, ε через поля конфигурации или\n"
             "      редактируйте hrl_config.json вручную.\n"
             "   c) Установите курикулум (последовательность сценариев и число эпизодов).\n"
-            "   d) Нажмите «▶ Запустить HRL»; система обучает L3→L2→L1 поочерёдно.\n"
-            "   e) По завершении — сравнительная таблица Flat vs HRL появится на вкладке.\n\n"
+            "   d) Нажмите «▶ Запустить обучение»; система обучает уровни поочерёдно.\n"
+            "   e) По завершении — сравнительная таблица Табличный vs Иерархический.\n\n"
             "4. МАССОВОЕ МОДЕЛИРОВАНИЕ (научное сравнение)\n"
             "   a) Откройте вкладку «🔬 Массовое».\n"
             "   b) Выберите число запусков N (рекомендуется 100–500), сценарии и агентов.\n"
             "   c) Нажмите «Запустить пакетную симуляцию».\n"
             "   d) Результаты выводятся в таблице с 95% ДИ и p-значениями (Mann-Whitney U).\n"
-            "   e) Экспортируйте CSV для использования в LaTeX/Word.\n\n"
+            "   e) Экспортируйте результаты для отчёта.\n\n"
             "5. ГЕНЕРАЦИЯ ОТЧЁТА\n"
             "   a) Откройте вкладку «Отчёт».\n"
             "   b) После проведения симуляции (и опционально обучения агентов) нажмите\n"
             "      «Сформировать PDF».\n"
             "   c) Отчёт включает: параметры сценария, хронологию событий, графики,\n"
-            "      нормативный анализ (ГОСТ), сравнение Flat vs HRL и выводы.\n"
+            "      нормативный анализ (ГОСТ), сравнение агентов и выводы.\n"
             "   d) Кнопка «📂 Открыть» активируется после генерации.\n\n"
             "ФАЗЫ ПОЖАРА (S1–S5)\n"
             "────────────────────────────────────────────────────────\n"
@@ -3841,7 +3850,7 @@ class TankFireApp(tk.Tk):
                 ("2", "Симуляция",  "▶ Пуск → Хронология\nи Динамика",              "timeline"),
                 ("3", "Табличное",  "Обучить плоский\nтабличный агент",               "rl"),
                 ("4", "Иерарх.",   "Обучить 3-уровневый\nагент (стратег./такт./опер.)", "hrl"),
-                ("5", "Массовое",   "N симуляций: Flat vs\nHRL + CI/p-value",         "batch"),
+                ("5", "Массовое",   "N симуляций: сравнение\nагентов, ДИ, статистика",  "batch"),
                 ("6", "Отчёт",      "Меню → Генерация →\nОтчёт / Экспорт",          self._open_report_window),
             ],
         }
