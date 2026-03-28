@@ -1719,7 +1719,7 @@ class TankFireApp(tk.Tk):
         ctrl = tk.Frame(parent, bg=P["panel2"])
         ctrl.pack(fill="x", padx=4, pady=(4, 0))
 
-        tk.Label(ctrl, text=" Обучение Flat Q-learning агента:",
+        tk.Label(ctrl, text=" Обучение табличного агента:",
                  bg=P["panel2"], fg=P["text"], font=("Arial", 9, "bold")
                  ).pack(side="left", padx=8, pady=5)
 
@@ -1841,7 +1841,7 @@ class TankFireApp(tk.Tk):
                     _upd_interval = max(1, total_flat // 100)
                     if done_ep % _upd_interval == 0:
                         pct = done_ep / total_flat * 100
-                        status = (f"Flat Q: эп. {done_ep}/{total_flat}  "
+                        status = (f"Таблич.: эп. {done_ep}/{total_flat}  "
                                   f"ε={flat_sim.agent.epsilon:.3f}")
                         self.after(0, lambda p=pct, s=status: [
                             self._rl_progress.configure(value=p),
@@ -2053,7 +2053,7 @@ class TankFireApp(tk.Tk):
         # ── PDF-отчёт ─────────────────────────────────────────────────────────
         f_pdf = section("PDF-отчёт для оперативного штаба")
         tk.Label(f_pdf, text=("Полный отчёт с параметрами сценария, динамикой пожара, RL-агентом,\n"
-                "сравнением Flat vs Иерархический RL, хронологией и выводами."),
+                "сравнением Табличный vs Иерархический агент, хронологией и выводами."),
                  font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
                  ).pack(anchor="w", padx=10, pady=(4, 2))
         self._pdf_status = tk.StringVar(value="")
@@ -2321,7 +2321,7 @@ class TankFireApp(tk.Tk):
                      ).grid(row=i, column=1, padx=4, pady=2, sticky="w")
 
         # --- Блок «Обучение» ---
-        pf2 = tk.LabelFrame(params_row, text=" Параметры Q-learning ",
+        pf2 = tk.LabelFrame(params_row, text=" Параметры обучения с подкреплением ",
                              font=("Arial", 8, "bold"),
                              bg=P["panel"], fg=P["text2"], bd=1)
         pf2.pack(side="left", fill="both", expand=True, padx=(3, 3), pady=2)
@@ -2345,7 +2345,7 @@ class TankFireApp(tk.Tk):
                      ).grid(row=r, column=c*2+1, padx=4, pady=2, sticky="w")
 
         # --- Блок «Curriculum» ---
-        pf3 = tk.LabelFrame(params_row, text=" Curriculum Learning ",
+        pf3 = tk.LabelFrame(params_row, text=" Учебная программа ",
                              font=("Arial", 8, "bold"),
                              bg=P["panel"], fg=P["text2"], bd=1)
         pf3.pack(side="left", fill="both", expand=True, padx=(3, 0), pady=2)
@@ -2354,7 +2354,7 @@ class TankFireApp(tk.Tk):
             ("Фаза 1 (эп., РВС-2000):",     "hrl_cur1", "200"),
             ("Фаза 2 (эп., РВС-2000+20000):","hrl_cur2", "300"),
             ("Фаза 3 (эп., РВС-20000):",    "hrl_cur3", "500"),
-            ("Flat агент (эп.):",            "hrl_flat_ep", "1000"),
+            ("Табличный агент (эп.):",       "hrl_flat_ep", "1000"),
             ("Оценочных прогонов:",          "hrl_neval", "100"),
         ]
         for i, (lbl, key, dflt) in enumerate(cur_params):
@@ -2414,7 +2414,7 @@ class TankFireApp(tk.Tk):
         note = tk.Frame(btn_frame, bg=P["panel2"], bd=1, relief="groove")
         note.pack(side="left", padx=(0, 12), pady=3)
         tk.Label(note,
-                 text="ℹ  Сначала обучите Flat агента\n    на вкладке «🤖 5. Flat RL»",
+                 text="ℹ  Сначала обучите табличного агента\n    на вкладке «Табличное ОП»",
                  bg=P["panel2"], fg=P["info"], font=("Arial", 8),
                  justify="left").pack(padx=8, pady=4)
 
@@ -2495,7 +2495,7 @@ class TankFireApp(tk.Tk):
         fig = self._hrl_fig
         fig.clear()
         axes = fig.subplots(1, 3)
-        titles = ["Flat: кривая обучения", "Иерарх.: кривая обучения",
+        titles = ["Табличный: кривая обучения", "Иерарх.: кривая обучения",
                   "Сравнение метрик"]
         for ax, title in zip(axes, titles):
             ax.set_facecolor(P["canvas"])
@@ -2592,11 +2592,11 @@ class TankFireApp(tk.Tk):
                     pct = done_ep / total_flat * 100
                     self.after(0, lambda p=pct, e=done_ep:
                                self._hrl_update_progress(
-                                   p, f"Flat: эп. {e}/{total_flat}",
-                                   f"Flat Q-learning: ε={self._hrl_flat_sim.agent.epsilon:.3f}"))
+                                   p, f"Таблич.: эп. {e}/{total_flat}",
+                                   f"Табличный агент: ε={self._hrl_flat_sim.agent.epsilon:.3f}"))
             self._hrl_flat_trained = True
             self.after(0, lambda: self._hrl_status_var.set(
-                "Flat агент обучен ✓   Запустите иерарх. или нажмите «Сравнить»"))
+                "Табличный агент обучен ✓   Запустите иерарх. или нажмите «Сравнить»"))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -2654,7 +2654,7 @@ class TankFireApp(tk.Tk):
         import threading
         if not self._hrl_flat_trained or not self._hrl_trained:
             self._hrl_status_var.set(
-                "⚠ Сначала обучите оба агента (Flat и Иерархический)")
+                "⚠ Сначала обучите оба агента (Табличный и Иерархический)")
             return
 
         n_eval = int(self._hrl_vars["hrl_neval"].get())
@@ -2721,7 +2721,7 @@ class TankFireApp(tk.Tk):
                 x  = range(len(sm))
                 ax0.plot(x, sm, color=colors["flat"], linewidth=1.2)
                 ax0.fill_between(x, sm, alpha=0.15, color=colors["flat"])
-        ax0.set_title("Flat Q-learning", color=P["text2"], fontsize=7)
+        ax0.set_title("Табличный агент", color=P["text2"], fontsize=7)
         ax0.set_xlabel("Эпизод", color=P["text2"], fontsize=6)
         ax0.set_ylabel("Награда (сглаж.)", color=P["text2"], fontsize=6)
         ax0.tick_params(colors=P["text2"], labelsize=6)
@@ -2818,7 +2818,7 @@ class TankFireApp(tk.Tk):
                     transform=ax.get_xaxis_transform())
 
             ax.set_xticks(x)
-            ax.set_xticklabels(["Flat", "Hier"], fontsize=7, color=P["text"])
+            ax.set_xticklabels(["Таблич.", "Иерарх."], fontsize=7, color=P["text"])
             ax.set_title(label[:25], color=P["text2"], fontsize=7)
             ax.tick_params(colors=P["text2"], labelsize=6)
             for s in ax.spines.values(): s.set_edgecolor(P["grid"])
@@ -2899,14 +2899,14 @@ class TankFireApp(tk.Tk):
                  font=("Arial", 8)).pack(side="left")
         self._batch_flat_var = tk.BooleanVar(value=True)
         self._batch_hier_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(row2, text="Flat Q-learning", variable=self._batch_flat_var,
+        tk.Checkbutton(row2, text="Табличный агент", variable=self._batch_flat_var,
                        bg=P["panel"], fg=P["text"], selectcolor=P["panel2"],
                        font=("Arial", 8)).pack(side="left", padx=4)
         tk.Checkbutton(row2, text="Иерархический RL", variable=self._batch_hier_var,
                        bg=P["panel"], fg=P["text"], selectcolor=P["panel2"],
                        font=("Arial", 8)).pack(side="left", padx=4)
 
-        tk.Label(row2, text="  ΔЗерно (seed offset):", bg=P["panel"], fg=P["text"],
+        tk.Label(row2, text="  Смещение зерна:", bg=P["panel"], fg=P["text"],
                  font=("Arial", 8)).pack(side="left", padx=(16, 0))
         self._batch_seed_var = tk.StringVar(value="100")
         tk.Entry(row2, textvariable=self._batch_seed_var, width=6,
@@ -3139,7 +3139,7 @@ class TankFireApp(tk.Tk):
 
         lines = []
         sep   = "─" * 100
-        hdr   = f"{'Метрика':<30} {'Flat Q: M [95%CI]':<28} {'Иерарх: M [95%CI]':<28} {'Δ%':>8}  p-value  Знч?"
+        hdr   = f"{'Метрика':<30} {'Таблич.: М [95%ДИ]':<28} {'Иерарх.: М [95%ДИ]':<28} {'Δ%':>8}  p-знач.  Знч?"
         lines.append(("header", hdr))
         lines.append(("header", sep))
 
@@ -3220,7 +3220,7 @@ class TankFireApp(tk.Tk):
                             top=0.92, bottom=0.1)
 
         colors_map = {"flat": P["info"], "hier": P["warn"]}
-        labels_map = {"flat": "Flat Q", "hier": "Иерарх."}
+        labels_map = {"flat": "Табличный", "hier": "Иерарх."}
 
         def style(ax, title):
             ax.set_facecolor(P["canvas"])
@@ -3346,7 +3346,7 @@ class TankFireApp(tk.Tk):
             rw   = [ep.get("reward", 0)      for ep in data if "error" not in ep]
             if not succ:
                 continue
-            lbl = "Flat Q-learning" if key == "flat" else "Иерархический RL"
+            lbl = "Табличный агент" if key == "flat" else "Иерархический агент"
             lines.append(f"\n{'─'*50}")
             lines.append(f"  {lbl}:")
             lines.append(f"  P(ext) = {np.mean(succ):.3f}  (n={len(succ)})")
@@ -3608,7 +3608,7 @@ class TankFireApp(tk.Tk):
         f_man = section("PDF-мануал программы")
         tk.Label(f_man,
                  text=("Руководство пользователя: интерфейс, сценарии, действия РТП,\n"
-                       "Q-learning агент, физическая модель, нормативная база."),
+                       "Агент ОП, физическая модель, нормативная база."),
                  font=("Arial", 8), bg=P["panel"], fg=P["text2"], justify="left"
                  ).pack(anchor="w", padx=10, pady=(4, 2))
         self._manual_status = tk.StringVar(value="")
