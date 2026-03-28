@@ -1004,49 +1004,59 @@ class ModeSelectDialog(tk.Tk):
              "#d68910",
              "Обучение на записях эксперта\nбез функции вознаграждения",
              ["Датасет из тренажёра/СППР",
-              "Supervised learning (P(a|s))",
-              "Сравнение с RL-агентами"]),
+              "Таблица вероятностей П(д|с)",
+              "Сравнение с агентами ОП"]),
             ("irl", "🔄", "Обратное\nобучение",
              "#a04000",
              "Восстановление функции\nвознаграждения из ПТП",
-             ["MaxEnt IRL из траекторий",
+             ["Из экспертных траекторий",
               "Веса приоритетов РТП",
-              "Сравнение с ручной reward"]),
+              "Сравнение с ручной ФВ"]),
         ]),
         ("В. Обучение с функцией вознаграждения", "#27ae60", [
             ("rl_flat", "🤖", "Табличное\nобучение",
              "#1e8449",
-             "Плоский Q-агент\nметодом проб и ошибок",
-             ["Q-таблица 315×15, ε-greedy",
-              "Тепловая карта Q-значений",
+             "Плоский агент методом\nпроб и ошибок",
+             ["Таблица 315 состояний × 15 действий",
+              "Тепловая карта ценностей",
               "Кривые обучения по эпизодам"]),
             ("rl_hier", "🏛", "Иерархическое\nобучение",
              "#1a5276",
              "Трёхуровневый агент\nстратегия → тактика → операции",
-             ["L3 (режим) → L2 (цель) → L1",
-              "Curriculum: серпухов → туапсе",
+             ["Стратегия → цель → действие",
+              "Учебная программа: от простого",
               "Сравнение с плоским агентом"]),
         ]),
         ("Г. На данных и обратной связи", "#8e44ad", [
             ("offline", "📦", "Пакетное\nобучение",
              "#7d3c98",
              "Обучение на фиксированном\nдатасете без симулятора",
-             ["Fitted Q-Iteration",
+             ["Итеративная аппроксимация",
               "Обучение на записях МЧС",
-              "Online vs Offline сравнение"]),
+              "Сравнение с онлайн-агентом"]),
             ("pref", "⚖", "По предпочтениям\nэксперта",
              "#117a65",
              "Эксперт сравнивает пары\nтраекторий — система учится",
-             ["Bradley-Terry модель",
-              "Калибровка reward из СППР",
+             ["Модель парных сравнений",
+              "Калибровка ФВ из СППР",
               "Итеративное дообучение"]),
         ]),
     ]
 
+    # Цвета светлой темы стартового экрана
+    _BG      = "#f5f6fa"
+    _BG2     = "#eef0f4"
+    _HDR_BG  = "#ffffff"
+    _TEXT    = "#2c3e50"
+    _TEXT2   = "#7f8c8d"
+    _CARD_BG = "#ffffff"
+    _CARD_HV = "#eaf2f8"
+    _BORDER  = "#d5d8dc"
+
     def __init__(self):
         super().__init__()
         self.title("САУР-ПСП — Выбор режима работы")
-        self.configure(bg="#1c2833")
+        self.configure(bg=self._BG)
         self.resizable(False, False)
         self._selected: Optional[str] = None
         self._build()
@@ -1057,108 +1067,102 @@ class ModeSelectDialog(tk.Tk):
         self.geometry(f"{w}x{h}+{(sw-w)//2}+{(sh-h)//2}")
 
     def _build(self):
+        BG, HDR, TXT, TXT2 = self._BG, self._HDR_BG, self._TEXT, self._TEXT2
+
         # ── Заголовок ────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg="#17202a", pady=16)
+        hdr = tk.Frame(self, bg=HDR, pady=16)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="🔥  САУР-ПСП",
+        tk.Label(hdr, text="САУР-ПСП",
                  font=("Arial", 20, "bold"),
-                 bg="#17202a", fg="#e74c3c").pack()
+                 bg=HDR, fg="#c0392b").pack()
         tk.Label(hdr,
-                 text="Система адаптивного управления реагированием ПСП",
-                 font=("Arial", 9), bg="#17202a", fg="#aab7b8").pack()
+                 text="Система адаптивного управления реагированием\nпожарно-спасательного подразделения",
+                 font=("Arial", 9), bg=HDR, fg=TXT2, justify="center").pack()
         tk.Label(hdr, text="Выберите режим работы:",
                  font=("Arial", 11, "bold"),
-                 bg="#17202a", fg="#ecf0f1").pack(pady=(10, 0))
+                 bg=HDR, fg=TXT).pack(pady=(10, 0))
 
         # ── Группы режимов ───────────────────────────────────────────────────
-        body = tk.Frame(self, bg="#1c2833")
-        body.pack(padx=16, pady=8)
+        body = tk.Frame(self, bg=BG)
+        body.pack(padx=12, pady=6)
 
         for group_name, group_color, modes in self._GROUPS:
             grp = tk.LabelFrame(body, text=f"  {group_name}  ",
-                                bg="#1c2833", fg=group_color,
+                                bg=BG, fg=group_color,
                                 font=("Arial", 9, "bold"),
                                 bd=1, relief="groove",
                                 labelanchor="nw")
-            grp.pack(fill="x", padx=4, pady=4)
-            row = tk.Frame(grp, bg="#1c2833")
-            row.pack(padx=4, pady=6)
+            grp.pack(fill="x", padx=4, pady=3)
+            row = tk.Frame(grp, bg=BG)
+            row.pack(padx=4, pady=4)
             for mode_key, icon, title, accent, desc, features in modes:
-                self._make_card(row, mode_key, icon, title, accent,
-                                "", desc, features)
+                self._make_card(row, mode_key, icon, title, accent, desc, features)
 
         # ── Подвал ───────────────────────────────────────────────────────────
-        footer = tk.Frame(self, bg="#17202a", pady=6)
+        footer = tk.Frame(self, bg=self._BG2, pady=6)
         footer.pack(fill="x")
         tk.Label(footer,
                  text="Сменить режим: меню Файл → Сменить режим  |  ГОСТ Р 51043-2002 / СП 155.13130.2014",
-                 font=("Arial", 8), bg="#17202a", fg="#5d6d7e").pack()
+                 font=("Arial", 8), bg=self._BG2, fg=self._TEXT2).pack()
 
-    def _make_card(self, parent, mode_key, icon, title, accent, bg_light,
-                   desc, features):
-        """Одна карточка режима с hover-эффектом."""
-        BG_NORMAL = "#2c3e50"
-        BG_HOVER  = "#34495e"
+    def _make_card(self, parent, mode_key, icon, title, accent, desc, features):
+        """Одна карточка режима (светлая тема) с hover-эффектом."""
+        BG_N = self._CARD_BG
+        BG_H = self._CARD_HV
 
-        outer = tk.Frame(parent, bg=accent, bd=0)
-        outer.pack(side="left", padx=10, pady=4)
+        outer = tk.Frame(parent, bg=self._BORDER, bd=0)
+        outer.pack(side="left", padx=5, pady=3)
 
-        card = tk.Frame(outer, bg=BG_NORMAL, cursor="hand2", padx=16, pady=14, bd=0)
-        card.pack(padx=2, pady=2)
+        card = tk.Frame(outer, bg=BG_N, cursor="hand2", padx=12, pady=10, bd=0)
+        card.pack(padx=1, pady=1)
 
         # Иконка
-        tk.Label(card, text=icon, font=("Arial", 32), bg=BG_NORMAL, fg=accent).pack()
+        tk.Label(card, text=icon, font=("Arial", 24), bg=BG_N, fg=accent).pack()
 
         # Заголовок
-        tk.Label(card, text=title, font=("Arial", 13, "bold"),
-                 bg=BG_NORMAL, fg="#ecf0f1").pack(pady=(4, 0))
+        tk.Label(card, text=title, font=("Arial", 10, "bold"),
+                 bg=BG_N, fg=self._TEXT, justify="center").pack(pady=(2, 0))
 
         # Описание
-        tk.Label(card, text=desc, font=("Arial", 9), bg=BG_NORMAL,
-                 fg="#aab7b8", justify="center", wraplength=210).pack(pady=(6, 8))
+        tk.Label(card, text=desc, font=("Arial", 8), bg=BG_N,
+                 fg=self._TEXT2, justify="center", wraplength=180).pack(pady=(4, 4))
 
         # Список возможностей
-        feats_frame = tk.Frame(card, bg=BG_NORMAL)
+        feats_frame = tk.Frame(card, bg=BG_N)
         feats_frame.pack(anchor="w", fill="x")
         for feat in features:
-            row = tk.Frame(feats_frame, bg=BG_NORMAL)
-            row.pack(fill="x", pady=1)
-            tk.Label(row, text="✓", font=("Arial", 8, "bold"),
-                     bg=BG_NORMAL, fg=accent).pack(side="left")
-            tk.Label(row, text=f" {feat}", font=("Arial", 8),
-                     bg=BG_NORMAL, fg="#bdc3c7").pack(side="left")
+            row = tk.Frame(feats_frame, bg=BG_N)
+            row.pack(fill="x", pady=0)
+            tk.Label(row, text="·", font=("Arial", 8, "bold"),
+                     bg=BG_N, fg=accent).pack(side="left")
+            tk.Label(row, text=f" {feat}", font=("Arial", 7),
+                     bg=BG_N, fg=self._TEXT2).pack(side="left")
 
         # Кнопка выбора
         btn = tk.Button(
             card,
-            text=f"  Выбрать →",
-            font=("Arial", 10, "bold"),
+            text="  Выбрать  ",
+            font=("Arial", 9, "bold"),
             bg=accent, fg="white",
-            relief="flat", padx=16, pady=6,
+            activebackground=accent, activeforeground="white",
+            relief="flat", padx=12, pady=4,
             cursor="hand2",
             command=lambda k=mode_key: self._select(k),
         )
-        btn.pack(pady=(12, 0), fill="x")
+        btn.pack(pady=(8, 0), fill="x")
 
-        # Hover эффекты
-        def _enter(e, c=card, bg=BG_HOVER):
-            for w in c.winfo_children():
-                try:
-                    w.config(bg=bg)
-                except Exception:
-                    pass
-            c.config(bg=bg)
+        # Hover эффекты (рекурсивный обход дочерних виджетов)
+        def _set_bg(widget, bg):
+            try:
+                widget.config(bg=bg)
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                if not isinstance(child, tk.Button):
+                    _set_bg(child, bg)
 
-        def _leave(e, c=card, bg=BG_NORMAL):
-            for w in c.winfo_children():
-                try:
-                    w.config(bg=bg)
-                except Exception:
-                    pass
-            c.config(bg=bg)
-
-        card.bind("<Enter>", _enter)
-        card.bind("<Leave>", _leave)
+        card.bind("<Enter>", lambda e, c=card: _set_bg(c, BG_H))
+        card.bind("<Leave>", lambda e, c=card: _set_bg(c, BG_N))
 
     def _select(self, mode: str):
         self._selected = mode
@@ -1308,9 +1312,9 @@ class TankFireApp(tk.Tk):
         # — Инструменты —
         tools_menu = tk.Menu(menubar, tearoff=0)
         if self._mode_cat == "research":
-            tools_menu.add_command(label="Flat RL — обучение",
+            tools_menu.add_command(label="Табличное обучение с подкреплением",
                                    command=lambda: self._menu_go_tab("rl"))
-            tools_menu.add_command(label="Иерарх. RL — обучение",
+            tools_menu.add_command(label="Иерархическое обучение с подкреплением",
                                    command=lambda: self._menu_go_tab("hrl"))
             tools_menu.add_command(label="Массовое моделирование",
                                    command=lambda: self._menu_go_tab("batch"))
@@ -1504,36 +1508,36 @@ class TankFireApp(tk.Tk):
         # ── Основные операционные вкладки (видны всегда) ─────────────────────
         # Хронология — журнал событий в реальном времени
         t_log = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_log, text="  Хронология")
+        nb.add(t_log, text="  Хронология событий")
         self._build_timeline_tab(t_log)
         self._tab_keys["timeline"] = nb.index("end") - 1
 
         # Динамика — графики метрик (площадь, расход, риск, фаза)
         t_met = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_met, text="  Динамика")
+        nb.add(t_met, text="  Динамика показателей")
         self._build_metrics_tab(t_met)
         self._tab_keys["metrics"] = nb.index("end") - 1
 
         # Справочник действий РТП
         t_ref = tk.Frame(nb, bg=P["bg"])
-        nb.add(t_ref, text="  Справочник")
+        nb.add(t_ref, text="  Справочник РТП")
         self._build_reference_tab(t_ref)
         self._tab_keys["ref"] = nb.index("end") - 1
 
         # ── Вкладки исследовательского режима (скрыты в trainer/sppр/imitation) ─
         if self._mode_cat == "research":
             t_rl = tk.Frame(nb, bg=P["bg"])
-            nb.add(t_rl, text="  Flat RL")
+            nb.add(t_rl, text="  Табличное ОП")
             self._build_rl_tab(t_rl)
             self._tab_keys["rl"] = nb.index("end") - 1
 
             t_hrl = tk.Frame(nb, bg=P["bg"])
-            nb.add(t_hrl, text="  Иерарх. RL")
+            nb.add(t_hrl, text="  Иерархическое ОП")
             self._build_hrl_tab(t_hrl)
             self._tab_keys["hrl"] = nb.index("end") - 1
 
             t_bat = tk.Frame(nb, bg=P["bg"])
-            nb.add(t_bat, text="  Массовое")
+            nb.add(t_bat, text="  Массовое моделирование")
             self._build_batch_tab(t_bat)
             self._tab_keys["batch"] = nb.index("end") - 1
 
@@ -3840,8 +3844,8 @@ class TankFireApp(tk.Tk):
             "research": [
                 ("1", "Настройки",  "⚙ Меню → Настройки →\nПараметры симуляции",    self._open_settings_window),
                 ("2", "Симуляция",  "▶ Пуск → Хронология\nи Динамика",              "timeline"),
-                ("3", "Flat RL",    "Обучить плоский\nQ-learning агент",              "rl"),
-                ("4", "Иерарх. RL", "Обучить 3-уровневый\nагент L3→L2→L1",           "hrl"),
+                ("3", "Табличное",  "Обучить плоский\nтабличный агент",               "rl"),
+                ("4", "Иерарх.",   "Обучить 3-уровневый\nагент (стратег./такт./опер.)", "hrl"),
                 ("5", "Массовое",   "N симуляций: Flat vs\nHRL + CI/p-value",         "batch"),
                 ("6", "Отчёт",      "Меню → Генерация →\nОтчёт / Экспорт",          self._open_report_window),
             ],
@@ -5359,6 +5363,12 @@ class TankFireApp(tk.Tk):
             "q_best": float(qv[best_a]),
         })
 
+        # Сбор датасета для клонирования поведения
+        state_idx = sim._state().to_index() if hasattr(sim._state(), 'to_index') else 0
+        self._bc_dataset.append({
+            "s": state_idx, "a": user_action_idx, "phase": sim.phase,
+        })
+
         # Показать фидбэк
         self._tr_feedback_var.set(verdict)
         self._tr_feedback_lbl.config(fg=fg)
@@ -5398,6 +5408,18 @@ class TankFireApp(tk.Tk):
             "sppр_deviations": self._sppр_deviations if self._mode == "sppр" else None,
         }
         self._save_run_to_db(record)
+
+        # Автосохранение датасета для клонирования поведения
+        if self._bc_dataset:
+            try:
+                from bc_agent import BCDataset
+                ds = BCDataset()
+                ds.load()  # загрузить существующий, если есть
+                for sample in self._bc_dataset:
+                    ds.add(sample["s"], sample["a"], sample.get("phase", ""))
+                ds.save()
+            except Exception:
+                pass
 
     def _autosave_trainer_log(self):
         """Сохранить журнал тренажёра в JSON и записать результат в runs.json."""
