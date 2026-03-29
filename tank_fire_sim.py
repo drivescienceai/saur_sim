@@ -974,10 +974,17 @@ class TankFireSim:
 # ДИАЛОГ ВЫБОРА РЕЖИМА
 # ══════════════════════════════════════════════════════════════════════════════
 class ModeSelectDialog(tk.Tk):
-    """Стартовый экран САУР-ПСП: пользователь выбирает режим работы.
+    """Стартовый экран САУР-ПСП — исследовательская платформа.
 
-    10 режимов сгруппированы по типу: без обучения, без reward, с reward,
-    на данных/обратной связи. После клика запускается TankFireApp.
+    Структура главного меню:
+      5 равноправных блоков:
+        1. Статистика и анализ данных
+        2. Анализ временных рядов
+        3. Марковские модели
+        4. Экспертная система и прецеденты
+        5. Обучение с подкреплением → второе меню (10 режимов RL)
+      + Утилиты:
+        Импорт базы пожаров | Генератор сценариев | Отчётные материалы
     """
 
     # (key, icon, title, accent, description, features)
@@ -1240,48 +1247,208 @@ class ModeSelectDialog(tk.Tk):
         BG, HDR, TXT, TXT2 = self._BG, self._HDR_BG, self._TEXT, self._TEXT2
 
         # ── Заголовок ────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=HDR, pady=6)
+        hdr = tk.Frame(self, bg=HDR, pady=8)
         hdr.pack(fill="x")
         tk.Label(hdr, text="САУР-ПСП",
-                 font=("Arial", 16, "bold"),
-                 bg=HDR, fg="#c0392b").pack()
+                 font=("Arial", 18, "bold"), bg=HDR, fg="#c0392b").pack()
         tk.Label(hdr,
-                 text="Исследовательская платформа адаптивного управления\n"
+                 text="Исследовательская платформа адаптивного управления "
                       "тушением пожаров резервуаров с нефтью и нефтепродуктами",
-                 font=("Arial", 8), bg=HDR, fg=TXT2, justify="center").pack()
+                 font=("Arial", 9), bg=HDR, fg=TXT2, justify="center").pack()
+        tk.Label(hdr,
+                 text="42 модуля  ·  ~25 000 строк  ·  10 режимов ОП  ·  "
+                      "15+ визуализаций  ·  118 тестов",
+                 font=("Arial", 7), bg=HDR, fg="#bdc3c7").pack(pady=(4, 0))
 
-        # ── Информационная панель о возможностях ─────────────────────────────
-        info = tk.Frame(self, bg=self._BG2)
-        info.pack(fill="x", padx=8, pady=(4, 0))
+        # ── 5 ОСНОВНЫХ БЛОКОВ ────────────────────────────────────────────────
+        tk.Label(self, text="Исследовательские модули",
+                 font=("Arial", 10, "bold"), bg=BG, fg=TXT).pack(pady=(8, 2))
 
-        capabilities = [
-            ("42 модуля", "~25 000 строк"),
-            ("10 режимов", "работы"),
-            ("15+ визуализаций", "и диаграмм"),
-            ("300+ сценариев", "импорт из Word"),
-            ("27 правил ЭС", "экспертная система"),
-            ("5 агентов МАОП", "мультиагентное ОП"),
-            ("PDF / DOCX / CSV", "генерация отчётов"),
-            ("118 тестов", "pytest"),
+        blocks_frame = tk.Frame(self, bg=BG)
+        blocks_frame.pack(fill="x", padx=10, pady=4)
+
+        # Определение 5 блоков: (icon, title, subtitle, color, description, command)
+        main_blocks = [
+            ("📊", "Статистика\nи анализ данных",
+             "Описательная, корреляции,\nANOVA, регрессия, распределения",
+             "#2980b9",
+             "Полный статистический анализ базы пожаров: описательная статистика "
+             "12 признаков (M, SD, Me, 95% ДИ), корреляционный анализ (Пирсон, "
+             "Спирмен), дисперсионный анализ (ANOVA/Краскел-Уоллис, η²), "
+             "множественная регрессия (R², F-тест), подгонка распределений "
+             "(Шапиро-Уилк, Вейбулл K-S). 4 типа визуализации.",
+             self._run_stat_analysis),
+
+            ("📈", "Анализ\nвременных рядов",
+             "ACF/PACF, CUSUM, Байес,\nспектральный анализ, разладки",
+             "#e67e22",
+             "Автокорреляционный и спектральный анализ показателей пожара "
+             "(риск, площадь, расход ОВ). Обнаружение точек разладки: CUSUM "
+             "и байесовский метод — формальный критерий момента адаптации. "
+             "Байесовская оценка параметров с априорным/апостериорным "
+             "распределением. Скользящие статистики.",
+             self._run_timeseries),
+
+            ("⛓", "Марковские\nмодели",
+             "Полумарковская цепь,\nВейбулл, калибровка, переходы",
+             "#27ae60",
+             "Полумарковская модель фаз пожара S1–S5 с распределением "
+             "Вейбулла F(t) = 1 − exp[−(t/λ)^k]. MLE-калибровка параметров "
+             "на реальных данных (N=300+) с бутстреп 95% ДИ. Матрица "
+             "переходных вероятностей. Стационарное распределение. "
+             "3 визуализации: подгонки, матрица, сравнение.",
+             self._run_calibration),
+
+            ("🔧", "Экспертная система\nи прецеденты",
+             "27 правил БУПО, CBR,\nкластеры, k-NN классификатор",
+             "#8e44ad",
+             "Продукционная ЭС (27 правил по фазам S1–S5, ссылки на ГОСТ). "
+             "Прецедентный анализ: база с 12 признаками, взвешенный k-NN, "
+             "K-Means кластеризация (4 кластера), классификатор ситуаций "
+             "(8 типов). Поиск ближайших прецедентов для СППР: "
+             "«в аналогичном случае РТП выбрал действие X».",
+             self._run_precedents),
+
+            ("🤖", "Обучение с\nподкреплением",
+             "10 режимов: от имитации\nдо мультиагентного ОП",
+             "#c0392b",
+             "Табличное ОП (Q-learning 315×15), иерархическое моноагентное "
+             "(L3→L2→L1, curriculum 1000 эпизодов), мультиагентное (5 агентов: "
+             "РТП + НБУ×3 + НТ), клонирование поведения, обратное ОП (IRL), "
+             "пакетное (FQI), по предпочтениям (Bradley-Terry). "
+             "Сравнение с ЭС. Коэффициент автономности α.",
+             self._open_rl_submenu),
         ]
-        for i, (title, sub) in enumerate(capabilities):
-            f = tk.Frame(info, bg=self._BG2)
-            f.pack(side="left", padx=6, pady=3)
-            tk.Label(f, text=title, font=("Arial", 8, "bold"),
-                     bg=self._BG2, fg="#c0392b").pack()
-            tk.Label(f, text=sub, font=("Arial", 6),
-                     bg=self._BG2, fg=TXT2).pack()
-            if i < len(capabilities) - 1:
-                tk.Label(info, text="│", bg=self._BG2, fg="#d5d8dc",
-                         font=("Arial", 10)).pack(side="left")
 
-        # ── Подзаголовок ─────────────────────────────────────────────────────
-        tk.Label(self, text="Выберите режим работы:",
-                 font=("Arial", 9, "bold"),
-                 bg=BG, fg=TXT).pack(pady=(4, 0))
+        for i, (icon, title, subtitle, color, desc, cmd) in enumerate(main_blocks):
+            self._make_block(blocks_frame, i, icon, title, subtitle,
+                             color, desc, cmd)
 
-        # ── Группы режимов: сетка 2×2 ───────────────────────────────────────
-        body = tk.Frame(self, bg=BG)
+        # ── Панель описания ──────────────────────────────────────────────────
+        desc_frame = tk.Frame(self, bg=HDR, bd=0)
+        desc_frame.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+
+        self._desc_var = tk.StringVar(
+            value="Наведите курсор на блок для подробного описания возможностей.")
+        self._desc_label = tk.Label(
+            desc_frame, textvariable=self._desc_var,
+            font=("Arial", 8), bg=HDR, fg=TXT,
+            justify="left", anchor="nw", wraplength=950,
+            padx=10, pady=6)
+        self._desc_label.pack(fill="both", expand=True)
+
+        # ── УТИЛИТЫ ──────────────────────────────────────────────────────────
+        tk.Label(self, text="Утилиты",
+                 font=("Arial", 9, "bold"), bg=BG, fg=TXT2).pack(pady=(2, 0))
+
+        util_frame = tk.Frame(self, bg=BG)
+        util_frame.pack(fill="x", padx=10, pady=(2, 4))
+
+        utilities = [
+            ("📂", "Импорт базы пожаров", "#1abc9c",
+             "Загрузка 300+ описаний из Word",
+             self._run_import),
+            ("🏭", "Генератор сценариев", "#d4ac0d",
+             "Параметрические, комбинаторные, пертурбации",
+             self._run_generator),
+            ("📄", "Отчётные материалы", "#e74c3c",
+             "Статья, PDF, DOCX, CSV, Excel, LaTeX",
+             self._run_reports_window),
+            ("📐", "Анализ чувствительности", "#566573",
+             "OAT, метод Морриса, валидация",
+             self._run_sensitivity),
+        ]
+        for icon, label, color, hint, cmd in utilities:
+            btn = tk.Button(util_frame, text=f"{icon}  {label}",
+                            font=("Arial", 8, "bold"),
+                            bg=color, fg="white",
+                            activebackground=color, activeforeground="white",
+                            relief="flat", padx=12, pady=4,
+                            cursor="hand2", command=cmd)
+            btn.pack(side="left", padx=4)
+            # Tooltip
+            btn.bind("<Enter>", lambda e, h=hint: self._desc_var.set(h))
+            btn.bind("<Leave>", lambda e: self._desc_var.set(
+                "Наведите курсор на блок для подробного описания возможностей."))
+
+        # ── Подвал ───────────────────────────────────────────────────────────
+        footer = tk.Frame(self, bg=self._BG2, pady=3)
+        footer.pack(fill="x")
+        tk.Label(footer,
+                 text="ГОСТ Р 51043-2002  |  СП 155.13130.2014  |  "
+                      "БУПО (Приказ МЧС №444)  |  Справочник РТП ВНИИПО",
+                 font=("Arial", 7), bg=self._BG2, fg=self._TEXT2).pack()
+
+    def _make_block(self, parent, index, icon, title, subtitle,
+                    color, description, command):
+        """Один из 5 основных блоков главного меню."""
+        BG_N = self._CARD_BG
+        BG_H = self._CARD_HV
+
+        outer = tk.Frame(parent, bg=self._BORDER, bd=0)
+        outer.pack(side="left", padx=4, pady=2, fill="both", expand=True)
+
+        card = tk.Frame(outer, bg=BG_N, cursor="hand2", padx=10, pady=8, bd=0)
+        card.pack(padx=1, pady=1, fill="both", expand=True)
+
+        # Иконка
+        tk.Label(card, text=icon, font=("Arial", 28), bg=BG_N, fg=color).pack()
+
+        # Заголовок
+        tk.Label(card, text=title, font=("Arial", 9, "bold"),
+                 bg=BG_N, fg=self._TEXT, justify="center").pack(pady=(2, 0))
+
+        # Подзаголовок
+        tk.Label(card, text=subtitle, font=("Arial", 7),
+                 bg=BG_N, fg=self._TEXT2, justify="center").pack(pady=(2, 4))
+
+        # Кнопка
+        btn = tk.Button(card, text="Открыть",
+                        font=("Arial", 9, "bold"),
+                        bg=color, fg="white",
+                        activebackground=color, activeforeground="white",
+                        relief="flat", padx=14, pady=3,
+                        cursor="hand2", command=command)
+        btn.pack(fill="x")
+
+        # Hover
+        default_desc = "Наведите курсор на блок для подробного описания возможностей."
+
+        def _set_bg(widget, bg):
+            try:
+                widget.config(bg=bg)
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                if not isinstance(child, tk.Button):
+                    _set_bg(child, bg)
+
+        def _enter(e):
+            _set_bg(card, BG_H)
+            self._desc_var.set(description)
+
+        def _leave(e):
+            _set_bg(card, BG_N)
+            self._desc_var.set(default_desc)
+
+        card.bind("<Enter>", _enter)
+        card.bind("<Leave>", _leave)
+
+    # ── Подменю RL (10 режимов) ──────────────────────────────────────────
+    def _open_rl_submenu(self):
+        """Открыть второе меню с 10 режимами RL."""
+        win = tk.Toplevel(self)
+        win.title("САУР-ПСП — Режимы обучения с подкреплением")
+        win.configure(bg=self._BG)
+        win.geometry("900x550")
+        win.resizable(True, True)
+
+        BG, HDR, TXT, TXT2 = self._BG, self._HDR_BG, self._TEXT, self._TEXT2
+
+        tk.Label(win, text="Выберите режим обучения с подкреплением",
+                 font=("Arial", 12, "bold"), bg=BG, fg=TXT).pack(pady=(10, 4))
+
+        body = tk.Frame(win, bg=BG)
         body.pack(fill="both", expand=True, padx=8, pady=4)
 
         for gi, (group_name, group_color, modes) in enumerate(self._GROUPS):
@@ -1289,74 +1456,97 @@ class ModeSelectDialog(tk.Tk):
             grp = tk.LabelFrame(body, text=f"  {group_name}  ",
                                 bg=BG, fg=group_color,
                                 font=("Arial", 8, "bold"),
-                                bd=1, relief="groove",
-                                labelanchor="nw")
+                                bd=1, relief="groove")
             grp.grid(row=r, column=c, padx=3, pady=2, sticky="nsew")
             row = tk.Frame(grp, bg=BG)
             row.pack(padx=2, pady=2)
             for mode_key, icon, title, accent, desc, features in modes:
-                self._make_card(row, mode_key, icon, title, accent, desc, features)
+                self._make_card(row, mode_key, icon, title, accent, desc,
+                                features, parent_win=win)
 
         body.columnconfigure(0, weight=1)
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
         body.rowconfigure(1, weight=1)
 
-        # ── Инструменты анализа (не зависят от режима симуляции) ────────────
-        tools_frame = tk.LabelFrame(self, text="  Инструменты платформы  ",
-                                    bg=BG, fg="#566573",
-                                    font=("Arial", 8, "bold"),
-                                    bd=1, relief="groove")
-        tools_frame.pack(fill="x", padx=8, pady=(2, 0))
-        tools_row = tk.Frame(tools_frame, bg=BG)
-        tools_row.pack(padx=4, pady=3)
+    # ── Окно «Отчётные материалы» ────────────────────────────────────────
+    def _run_reports_window(self):
+        """Открыть окно генерации отчётов, статей, экспорта."""
+        win = tk.Toplevel(self)
+        win.title("САУР-ПСП — Отчётные материалы")
+        win.configure(bg=self._BG)
+        win.geometry("700x500")
+        win.resizable(True, True)
 
-        tool_items = [
-            ("📊", "Стат. анализ",       "#2980b9", self._run_stat_analysis),
-            ("📈", "Временные ряды",     "#e67e22", self._run_timeseries),
-            ("🔍", "Прецеденты",         "#8e44ad", self._run_precedents),
-            ("⚙", "Калибровка модели",  "#27ae60", self._run_calibration),
-            ("📐", "Чувствительность",   "#c0392b", self._run_sensitivity),
-            ("📂", "Импорт сценариев",   "#1abc9c", self._run_import),
-            ("🏭", "Генератор сценариев","#d4ac0d", self._run_generator),
-            ("💾", "Экспорт данных",     "#34495e", self._run_export),
-            ("📑", "Научная статья",     "#e74c3c", self._run_article),
+        BG, TXT, TXT2 = self._BG, self._TEXT, self._TEXT2
+
+        tk.Label(win, text="Генерация отчётных материалов",
+                 font=("Arial", 12, "bold"), bg=BG, fg=TXT).pack(pady=(10, 6))
+
+        reports = [
+            ("📑", "Научная статья IMRAD",
+             "DOCX с 10 рисунками, 8 таблицами, 6 разделами",
+             "#c0392b", self._run_article),
+            ("📄", "PDF-отчёт по симуляции",
+             "Параметры, хронология, графики, нормативный анализ",
+             "#2980b9", lambda: self._tool_message("PDF-отчёт",
+             "Запустите симуляцию, затем сгенерируйте отчёт из меню.")),
+            ("📊", "Экспорт CSV / Excel",
+             "Прецеденты, статистика, корреляции, ANOVA — для R/SPSS/Excel",
+             "#27ae60", self._run_export),
+            ("📐", "LaTeX-таблицы",
+             "Таблицы для вставки в диссертацию",
+             "#e67e22", self._run_export),
+            ("📋", "Структурно-логическая схема",
+             "Схема диссертации (10 уровней, цветовое кодирование)",
+             "#8e44ad", self._run_dissertation_scheme),
+            ("🗺", "Схема карты пожара",
+             "Все 16 элементов визуализации оперативной обстановки",
+             "#1abc9c", self._run_map_scheme),
+            ("📖", "Мануал программы (PDF)",
+             "Руководство пользователя САУР-ПСП",
+             "#566573", self._run_manual),
         ]
-        for icon, label, color, cmd in tool_items:
-            btn_frame = tk.Frame(tools_row, bg=BG)
-            btn_frame.pack(side="left", padx=2)
-            btn = tk.Button(btn_frame, text=f"{icon} {label}",
-                            font=("Arial", 7, "bold"),
-                            bg=color, fg="white",
+
+        for icon, title, hint, color, cmd in reports:
+            row = tk.Frame(win, bg=BG)
+            row.pack(fill="x", padx=12, pady=2)
+            btn = tk.Button(row, text=f"{icon}  {title}",
+                            font=("Arial", 9, "bold"),
+                            bg=color, fg="white", anchor="w",
                             activebackground=color, activeforeground="white",
-                            relief="flat", padx=6, pady=2,
-                            cursor="hand2", command=cmd)
-            btn.pack()
+                            relief="flat", padx=12, pady=4,
+                            cursor="hand2", command=cmd, width=30)
+            btn.pack(side="left")
+            tk.Label(row, text=hint, font=("Arial", 8),
+                     bg=BG, fg=TXT2).pack(side="left", padx=8)
 
-        # ── Панель описания (обновляется при наведении на карточку) ────────
-        desc_frame = tk.Frame(self, bg=HDR, bd=0)
-        desc_frame.pack(fill="both", expand=True, padx=8, pady=(2, 4))
+    def _run_dissertation_scheme(self):
+        try:
+            from generate_dissertation_scheme import generate_scheme
+            path = generate_scheme()
+            self._tool_message("Схема диссертации", f"Сохранена: {path}")
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
 
-        self._desc_var = tk.StringVar(
-            value="Наведите курсор на карточку режима для подробного описания с примером.")
-        self._desc_label = tk.Label(
-            desc_frame, textvariable=self._desc_var,
-            font=("Arial", 8), bg=HDR, fg=TXT,
-            justify="left", anchor="nw", wraplength=900,
-            padx=10, pady=6,
-        )
-        self._desc_label.pack(fill="both", expand=True)
+    def _run_map_scheme(self):
+        try:
+            from generate_map_scheme import generate_map_scheme
+            path = generate_map_scheme()
+            self._tool_message("Схема карты", f"Сохранена: {path}")
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
 
-        # ── Подвал ───────────────────────────────────────────────────────────
-        footer = tk.Frame(self, bg=self._BG2, pady=3)
-        footer.pack(fill="x")
-        tk.Label(footer,
-                 text="Полумарковские модели  |  ОП / ЭС / МАОП / IRL  |  "
-                      "Прецедентный анализ  |  Статистика  |  Калибровка  |  "
-                      "ГОСТ Р 51043-2002 / СП 155.13130.2014",
-                 font=("Arial", 7), bg=self._BG2, fg=self._TEXT2).pack()
+    def _run_manual(self):
+        try:
+            from manual_generator import generate_manual
+            path = generate_manual()
+            self._tool_message("Мануал", f"Сохранён: {path}")
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
 
-    def _make_card(self, parent, mode_key, icon, title, accent, desc, features):
+    def _make_card(self, parent, mode_key, icon, title, accent, desc, features,
+                   parent_win=None):
         """Компактная карточка режима (светлая тема) с hover-эффектом."""
         BG_N = self._CARD_BG
         BG_H = self._CARD_HV
@@ -1387,7 +1577,7 @@ class ModeSelectDialog(tk.Tk):
             activebackground=accent, activeforeground="white",
             relief="flat", padx=10, pady=2,
             cursor="hand2",
-            command=lambda k=mode_key: self._select(k),
+            command=lambda k=mode_key, pw=parent_win: self._select(k, pw),
         )
         btn.pack(pady=(2, 0), fill="x")
 
@@ -1606,7 +1796,12 @@ class ModeSelectDialog(tk.Tk):
         except Exception as e:
             self._tool_message("Ошибка", str(e))
 
-    def _select(self, mode: str):
+    def _select(self, mode: str, parent_win=None):
+        if parent_win:
+            try:
+                parent_win.destroy()
+            except Exception:
+                pass
         self._selected = mode
         self.destroy()
 
