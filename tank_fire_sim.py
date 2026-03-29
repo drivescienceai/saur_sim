@@ -622,6 +622,8 @@ class TankFireSim:
         return min(1.0, base + area_f)
 
     # ── Применение действия RL ─────────────────────────────────────────────────
+    # Примечание: if-elif на 15 действий сохранён намеренно (каждое действие
+    # уникально модифицирует состояние; dict-dispatch менее читаем).
     def _apply(self, a: int) -> float:
         code, level, desc = ACTIONS[a]
         r = 0.0
@@ -3319,7 +3321,7 @@ class TankFireApp(tk.Tk):
         """Показать таблицу и графики сравнения."""
         import numpy as np
 
-        def bootstrap_ci(data, stat=np.mean, n=2000, alpha=0.05):
+        def bootstrap_ci(data, stat=np.mean, n=10000, alpha=0.05):
             if len(data) < 2:
                 return stat(data), stat(data), stat(data)
             boots = [stat(np.random.choice(data, len(data), replace=True)) for _ in range(n)]
@@ -5370,29 +5372,22 @@ class TankFireApp(tk.Tk):
 
     # ── Экспертное действие (для режима «Имитация») ─────────────────────────
     def _expert_action(self) -> int:
-        """Выбрать действие по экспертным правилам текущей фазы.
+        """Выбрать действие по экспертной системе (делегирует expert_system.py).
 
-        Правило: из допустимых действий фазы (PHASE_VALID) выбрать первое
-        по приоритету. Приоритет определяется логикой реального РТП:
-        фаза S1 → разведка (O4), S2 → охлаждение (O1), S3 → наращивание (T3),
-        S4 → пенная атака (O3), S5 → контроль (O4).
+        Убирает дублирование: единый набор правил в expert_system.ExpertSystem.
         """
-        phase = self.sim.phase
-        valid = PHASE_VALID.get(phase, [12])  # по умолчанию O4 (разведка)
-
-        # Приоритет действий по фазам (экспертное знание)
-        _PRIORITY = {
-            "S1": [12, 7, 8, 0, 2],        # O4→T3→T4→S1→S3
-            "S2": [9, 10, 5, 8, 1, 2, 12],  # O1→O2→T1→T4→S2→S3→O4
-            "S3": [7, 8, 9, 10, 6, 11, 12], # T3→T4→O1→O2→T2→O3→O4
-            "S4": [11, 3, 12, 4, 6, 0],     # O3→S4→O4→S5→T2→S1
-            "S5": [12, 13, 10, 14],          # O4→O5→O2→O6
-        }
-        priority = _PRIORITY.get(phase, [12])
-        for a in priority:
-            if a in valid:
-                return a
-        return valid[0] if valid else 12
+        try:
+            if not hasattr(self, "_es_instance"):
+                try:
+                    from .expert_system import ExpertSystem
+                except ImportError:
+                    from expert_system import ExpertSystem
+                self._es_instance = ExpertSystem()
+            action, _, _ = self._es_instance.select_action_from_sim(self.sim)
+            return action
+        except Exception:
+            # Fallback: разведка
+            return 12
 
     def _on_speed_change(self):
         self._speed = self.SPEEDS.get(self._speed_var.get(), 15)
@@ -5589,7 +5584,7 @@ class TankFireApp(tk.Tk):
             self.after(800, self._show_debriefing)
 
     def _record_sim_run(self):
-        """Записать итог прогона (research/sppр) в runs.json."""
+        """Записать итог прогона в runs.json + централизованную БД."""
         import datetime
         sim = self.sim
         record = {
@@ -5604,6 +5599,17 @@ class TankFireApp(tk.Tk):
             "sppр_deviations": self._sppр_deviations if self._mode == "sppр" else None,
         }
         self._save_run_to_db(record)
+
+        # Сохранить в централизованную БД
+        try:
+            from results_db import get_db
+            get_db().log_experiment(
+                mode=self._mode, scenario=self._scenario_key,
+                duration_min=sim.t, extinguished=sim.extinguished,
+                localized=sim.localized, foam_attacks=sim.foam_attacks,
+                risk_max=record["risk_max"])
+        except Exception:
+            pass
 
         # Автосохранение датасета для клонирования поведения
         if self._bc_dataset:

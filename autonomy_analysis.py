@@ -169,6 +169,17 @@ def compute_autonomy(trace: List[HRLStepRecord],
         chunk2 = deviations_l2[start:i+1]
         result.alpha_L2_timeline.append((trace[i].t, float(np.mean(chunk2))))
 
+    # Автосохранение в централизованную БД
+    try:
+        from results_db import get_db
+        get_db().log_autonomy(
+            {"L1": result.alpha_L1, "L2": result.alpha_L2,
+             "L3": result.alpha_L3, "L4": result.alpha_L4,
+             "L5": result.alpha_L5},
+            scenario=scenario)
+    except Exception:
+        pass
+
     return result
 
 

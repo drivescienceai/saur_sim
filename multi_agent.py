@@ -450,11 +450,22 @@ class MultiAgentSystem:
         }
 
     def end_episode(self):
-        """Завершить эпизод: decay ε, обнулить счётчики."""
+        """Завершить эпизод: decay ε, обнулить счётчики, сохранить в БД."""
         self.rtp.end_episode()
         for nbu in self.nbu:
             nbu.end_episode()
         self.nt.end_episode()
+
+        # Автосохранение в централизованную БД
+        try:
+            from results_db import get_db
+            get_db().log_multiagent(
+                n_agents=1 + self.cfg.n_sectors + 1,
+                autonomy=self.autonomy_report(),
+                decision_log_size=len(self.decision_log))
+        except Exception:
+            pass
+
         self._step_count = 0
         self._episode_count += 1
 

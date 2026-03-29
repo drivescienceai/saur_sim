@@ -306,7 +306,7 @@ class AdaptationFunction:
         }
         J_depth = float(np.mean([mode_depth.get(m, 0) for m in modes]))
 
-        return {
+        result = {
             "J_L7": round(J_L7, 4),
             "J_stability": round(J_stability, 4),
             "J_transitions": J_transitions,
@@ -317,6 +317,15 @@ class AdaptationFunction:
             "delta_s_mean": round(float(np.mean(delta_values)), 4),
             "n_steps": n,
         }
+
+        # Автосохранение в централизованную БД
+        try:
+            from results_db import get_db
+            get_db().log_adaptation(result)
+        except Exception:
+            pass
+
+        return result
 
     def reset(self):
         self.history = []

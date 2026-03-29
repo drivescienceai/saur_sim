@@ -210,7 +210,19 @@ class MaxEntIRL:
                 break
 
         self._trained = True
-        return self._make_result()
+        result = self._make_result()
+
+        # Автосохранение в централизованную БД
+        try:
+            from results_db import get_db
+            get_db().log_irl(
+                weights=result["weights"],
+                feature_names=result["feature_names"],
+                interpretation=result["interpretation"])
+        except Exception:
+            pass
+
+        return result
 
     def _make_result(self) -> Dict:
         """Сформировать результат с интерпретацией."""

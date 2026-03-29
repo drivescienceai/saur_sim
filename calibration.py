@@ -120,6 +120,16 @@ class SemiMarkovCalibrator:
         self.result.figures["comparison"] = self._plot_calibrated_vs_default(
             weibull_params)
 
+        # Автосохранение в централизованную БД
+        try:
+            from results_db import get_db
+            wb = {p: {"k": w.k, "lam": w.lam, "n": w.n_samples,
+                       "ks_p": w.ks_p}
+                  for p, w in weibull_params.items()}
+            get_db().log_calibration(weibull_params=wb, quality=quality)
+        except Exception:
+            pass
+
         return self.result
 
     def _extract_phase_durations(self, cb: CaseBase) -> Dict[str, List[float]]:
