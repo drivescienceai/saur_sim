@@ -1239,15 +1239,46 @@ class ModeSelectDialog(tk.Tk):
     def _build(self):
         BG, HDR, TXT, TXT2 = self._BG, self._HDR_BG, self._TEXT, self._TEXT2
 
-        # ── Заголовок (компактный) ───────────────────────────────────────────
-        hdr = tk.Frame(self, bg=HDR, pady=8)
+        # ── Заголовок ────────────────────────────────────────────────────────
+        hdr = tk.Frame(self, bg=HDR, pady=6)
         hdr.pack(fill="x")
-        tk.Label(hdr, text="САУР-ПСП  —  Выбор режима работы",
-                 font=("Arial", 14, "bold"),
+        tk.Label(hdr, text="САУР-ПСП",
+                 font=("Arial", 16, "bold"),
                  bg=HDR, fg="#c0392b").pack()
         tk.Label(hdr,
-                 text="Система адаптивного управления реагированием пожарно-спасательного подразделения",
-                 font=("Arial", 8), bg=HDR, fg=TXT2).pack()
+                 text="Исследовательская платформа адаптивного управления\n"
+                      "тушением пожаров резервуаров с нефтью и нефтепродуктами",
+                 font=("Arial", 8), bg=HDR, fg=TXT2, justify="center").pack()
+
+        # ── Информационная панель о возможностях ─────────────────────────────
+        info = tk.Frame(self, bg=self._BG2)
+        info.pack(fill="x", padx=8, pady=(4, 0))
+
+        capabilities = [
+            ("42 модуля", "~25 000 строк"),
+            ("10 режимов", "работы"),
+            ("15+ визуализаций", "и диаграмм"),
+            ("300+ сценариев", "импорт из Word"),
+            ("27 правил ЭС", "экспертная система"),
+            ("5 агентов МАОП", "мультиагентное ОП"),
+            ("PDF / DOCX / CSV", "генерация отчётов"),
+            ("118 тестов", "pytest"),
+        ]
+        for i, (title, sub) in enumerate(capabilities):
+            f = tk.Frame(info, bg=self._BG2)
+            f.pack(side="left", padx=6, pady=3)
+            tk.Label(f, text=title, font=("Arial", 8, "bold"),
+                     bg=self._BG2, fg="#c0392b").pack()
+            tk.Label(f, text=sub, font=("Arial", 6),
+                     bg=self._BG2, fg=TXT2).pack()
+            if i < len(capabilities) - 1:
+                tk.Label(info, text="│", bg=self._BG2, fg="#d5d8dc",
+                         font=("Arial", 10)).pack(side="left")
+
+        # ── Подзаголовок ─────────────────────────────────────────────────────
+        tk.Label(self, text="Выберите режим работы:",
+                 font=("Arial", 9, "bold"),
+                 bg=BG, fg=TXT).pack(pady=(4, 0))
 
         # ── Группы режимов: сетка 2×2 ───────────────────────────────────────
         body = tk.Frame(self, bg=BG)
@@ -1289,7 +1320,9 @@ class ModeSelectDialog(tk.Tk):
         footer = tk.Frame(self, bg=self._BG2, pady=3)
         footer.pack(fill="x")
         tk.Label(footer,
-                 text="Сменить режим: Файл → Сменить режим  |  ГОСТ Р 51043-2002",
+                 text="Полумарковские модели  |  ОП / ЭС / МАОП / IRL  |  "
+                      "Прецедентный анализ  |  Статистика  |  Калибровка  |  "
+                      "ГОСТ Р 51043-2002 / СП 155.13130.2014",
                  font=("Arial", 7), bg=self._BG2, fg=self._TEXT2).pack()
 
     def _make_card(self, parent, mode_key, icon, title, accent, desc, features):
