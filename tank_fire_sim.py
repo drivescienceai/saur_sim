@@ -1302,9 +1302,40 @@ class ModeSelectDialog(tk.Tk):
         body.rowconfigure(0, weight=1)
         body.rowconfigure(1, weight=1)
 
+        # ── Инструменты анализа (не зависят от режима симуляции) ────────────
+        tools_frame = tk.LabelFrame(self, text="  Инструменты платформы  ",
+                                    bg=BG, fg="#566573",
+                                    font=("Arial", 8, "bold"),
+                                    bd=1, relief="groove")
+        tools_frame.pack(fill="x", padx=8, pady=(2, 0))
+        tools_row = tk.Frame(tools_frame, bg=BG)
+        tools_row.pack(padx=4, pady=3)
+
+        tool_items = [
+            ("📊", "Стат. анализ",       "#2980b9", self._run_stat_analysis),
+            ("📈", "Временные ряды",     "#e67e22", self._run_timeseries),
+            ("🔍", "Прецеденты",         "#8e44ad", self._run_precedents),
+            ("⚙", "Калибровка модели",  "#27ae60", self._run_calibration),
+            ("📐", "Чувствительность",   "#c0392b", self._run_sensitivity),
+            ("📂", "Импорт сценариев",   "#1abc9c", self._run_import),
+            ("🏭", "Генератор сценариев","#d4ac0d", self._run_generator),
+            ("💾", "Экспорт данных",     "#34495e", self._run_export),
+            ("📑", "Научная статья",     "#e74c3c", self._run_article),
+        ]
+        for icon, label, color, cmd in tool_items:
+            btn_frame = tk.Frame(tools_row, bg=BG)
+            btn_frame.pack(side="left", padx=2)
+            btn = tk.Button(btn_frame, text=f"{icon} {label}",
+                            font=("Arial", 7, "bold"),
+                            bg=color, fg="white",
+                            activebackground=color, activeforeground="white",
+                            relief="flat", padx=6, pady=2,
+                            cursor="hand2", command=cmd)
+            btn.pack()
+
         # ── Панель описания (обновляется при наведении на карточку) ────────
         desc_frame = tk.Frame(self, bg=HDR, bd=0)
-        desc_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        desc_frame.pack(fill="both", expand=True, padx=8, pady=(2, 4))
 
         self._desc_var = tk.StringVar(
             value="Наведите курсор на карточку режима для подробного описания с примером.")
@@ -1384,6 +1415,197 @@ class ModeSelectDialog(tk.Tk):
         card.bind("<Enter>", _on_enter)
         card.bind("<Leave>", _on_leave)
 
+    # ── Обработчики кнопок инструментов ─────────────────────────────────
+    def _tool_message(self, title: str, result: str):
+        """Показать результат работы инструмента."""
+        win = tk.Toplevel(self)
+        win.title(title)
+        win.geometry("600x400")
+        win.configure(bg="white")
+        text = tk.Text(win, wrap="word", font=("Consolas", 9),
+                       bg="white", fg="#2c3e50", padx=10, pady=10)
+        text.pack(fill="both", expand=True)
+        text.insert("1.0", result)
+        text.config(state="disabled")
+        tk.Button(win, text="Закрыть", command=win.destroy,
+                  bg="#c0392b", fg="white", font=("Arial", 9, "bold"),
+                  relief="flat", padx=12, pady=4).pack(pady=6)
+
+    def _run_stat_analysis(self):
+        try:
+            from cbr_engine import generate_demo_casebase
+            from stat_analysis import full_analysis
+            cb = generate_demo_casebase(100)
+            r = full_analysis(cb)
+            lines = [f"Статистический анализ ({r['n_cases']} случаев)\n"]
+            lines.append("Описательная статистика:")
+            for d in r.get("descriptive", [])[:6]:
+                lines.append(f"  {d['name'][:30]:<32s} M={d['M']:>8.1f}  SD={d['SD']:>6.1f}  {d['CI95']}")
+            lines.append(f"\nЗначимые корреляции: {len(r.get('significant_correlations', []))}")
+            for c in r.get("significant_correlations", [])[:5]:
+                lines.append(f"  {c['a'][:20]} — {c['b'][:20]}: r={c['r']:+.3f}")
+            lines.append(f"\nДисперсионный анализ:")
+            for a in r.get("anova", []):
+                lines.append(f"  {a['фактор']} → {a['отклик']}: p={a['p']:.4f} η²={a['η²']:.3f}")
+            lines.append(f"\nВизуализации сохранены в data/figures/")
+            self._tool_message("Статистический анализ", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_timeseries(self):
+        try:
+            from timeseries import (cusum_detect, bayesian_changepoint,
+                                     plot_changepoint_analysis, plot_acf_pacf)
+            import numpy as np
+            rng = np.random.RandomState(42)
+            risk = np.concatenate([rng.normal(0.3, 0.05, 100),
+                                   rng.normal(0.7, 0.08, 100)])
+            times = np.arange(200) * 5.0
+            cp = cusum_detect(risk, threshold=2.0, times=times)
+            cp_b = bayesian_changepoint(risk, times=times)
+            p1 = plot_changepoint_analysis(times, risk, cp + cp_b, "Индекс риска")
+            p2 = plot_acf_pacf(risk, "Индекс риска")
+            lines = [f"Анализ временных рядов (200 точек)\n",
+                     f"CUSUM: {len(cp)} точек разладки",
+                     f"Байес: {len(cp_b)} точек разладки",
+                     f"\nВизуализации:\n  {p1}\n  {p2}"]
+            self._tool_message("Анализ временных рядов", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_precedents(self):
+        try:
+            from cbr_engine import (generate_demo_casebase, ScenarioClusterer,
+                                     SituationClassifier, PrecedentSearch)
+            cb = generate_demo_casebase(100)
+            cl = ScenarioClusterer(4)
+            r = cl.fit(cb)
+            sc = SituationClassifier()
+            sc.fit_from_casebase(cb)
+            ps = PrecedentSearch(cb)
+            sim = ps.find_for_situation(20000, 1250, 4, "бензин", 0.70, k=5)
+            lines = [f"Прецедентный анализ ({len(cb)} случаев)\n"]
+            lines.append(f"Кластеризация ({r['n_clusters']} кластеров):")
+            for name, size in r["cluster_sizes"].items():
+                lines.append(f"  {name}: {size}")
+            lines.append(f"\n5 ближайших прецедентов для РВС 20000 м³, ранг 4:")
+            for case, dist in sim:
+                lines.append(f"  {case.case_id}: V={case.rvs_volume:.0f}, "
+                             f"ранг {case.fire_rank}, d={dist:.2f}")
+            self._tool_message("Прецедентный анализ", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_calibration(self):
+        try:
+            from cbr_engine import generate_demo_casebase
+            from calibration import SemiMarkovCalibrator
+            cb = generate_demo_casebase(100)
+            cal = SemiMarkovCalibrator()
+            r = cal.calibrate(cb)
+            lines = [f"Калибровка полумарковской модели ({r.n_cases} случаев)\n"]
+            lines.append(f"{'Фаза':<6} {'k':>6} {'λ (мин)':>10} {'n':>5} {'KS p':>8}")
+            for p in SemiMarkovCalibrator.PHASES:
+                w = r.weibull_params[p]
+                lines.append(f"  {w.phase:<6} {w.k:>6.2f} {w.lam:>10.1f} "
+                             f"{w.n_samples:>5} {w.ks_p:>8.4f}")
+            lines.append(f"\nВизуализации: {list(r.figures.values())}")
+            self._tool_message("Калибровка модели", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_sensitivity(self):
+        try:
+            from sensitivity import one_at_a_time, plot_sensitivity_tornado
+            import numpy as np
+            rng = np.random.RandomState(42)
+            def model(p):
+                return (0.5 + 0.3*p.get("alpha",0.15) + 0.1*(1-p.get("epsilon",0.9))
+                        + 0.15*p.get("gamma",0.95) - 0.2*p.get("lambda",0.3)
+                        + rng.normal(0, 0.02))
+            base = {"alpha": 0.15, "epsilon": 0.90, "gamma": 0.95,
+                    "lambda": 0.30, "foam": 0.065}
+            ranges = {k: (0.01, 1.0, 8) for k in base}
+            results = one_at_a_time(model, base, ranges)
+            path = plot_sensitivity_tornado(results)
+            lines = [f"Анализ чувствительности\n"]
+            for r in results:
+                lines.append(f"  #{r.rank} {r.param_name}: "
+                             f"эластичность={r.elasticity:.3f}")
+            lines.append(f"\nТорнадо-диаграмма: {path}")
+            self._tool_message("Анализ чувствительности", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_import(self):
+        folder = filedialog.askdirectory(title="Выберите папку с описаниями пожаров (.docx)")
+        if not folder:
+            return
+        try:
+            from scenario_importer import ScenarioImporter
+            imp = ScenarioImporter()
+            report = imp.import_folder(folder)
+            lines = [f"Импорт из: {folder}\n",
+                     f"Всего файлов:     {report.total_files}",
+                     f"Успешно:          {report.successful}",
+                     f"Низкое качество:  {report.low_quality}",
+                     f"Ошибки:           {report.errors}",
+                     f"Среднее качество: {report.mean_quality:.0%}"]
+            self._tool_message("Импорт сценариев", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_generator(self):
+        try:
+            from scenario_generator import ScenarioGenerator
+            gen = ScenarioGenerator()
+            p = gen.generate_parametric(20)
+            c = gen.generate_combinatorial(
+                volumes=[2000, 5000, 20000],
+                fuels=["бензин", "нефть", "мазут"],
+                roofs=["конусная", "плавающая"])
+            all_s = p + c
+            paths = gen.save_scenarios(all_s)
+            stats = gen.stats(all_s)
+            lines = [f"Генератор сценариев\n",
+                     f"Параметрических: {len(p)}",
+                     f"Комбинаторных:   {len(c)}",
+                     f"Всего:           {stats['n']}",
+                     f"Объёмы: {stats['volume_min']:.0f} — {stats['volume_max']:.0f} м³",
+                     f"\nСохранено: {len(paths)} файлов в data/scenarios_synthetic/"]
+            self._tool_message("Генератор сценариев", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_export(self):
+        try:
+            from cbr_engine import generate_demo_casebase
+            from stat_analysis import full_analysis
+            from data_export import full_export
+            cb = generate_demo_casebase(50)
+            stats = full_analysis(cb)
+            paths = full_export(case_base=cb, stat_results=stats)
+            lines = ["Экспорт данных\n"]
+            for name, path in paths.items():
+                lines.append(f"  {name}: {path}")
+            self._tool_message("Экспорт данных", "\n".join(lines))
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _run_article(self):
+        try:
+            from generate_imrad_article import generate_imrad_article
+            from visualizations import generate_all_demo
+            from autonomy_analysis import generate_demo
+            generate_all_demo()
+            generate_demo()
+            path = generate_imrad_article()
+            self._tool_message("Научная статья",
+                               f"Статья IMRAD сгенерирована:\n\n{path}\n\n"
+                               f"Включает 10 рисунков, 8 таблиц, 6 разделов.")
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
     def _select(self, mode: str):
         self._selected = mode
         self.destroy()
@@ -1391,7 +1613,7 @@ class ModeSelectDialog(tk.Tk):
     def run(self) -> str:
         """Показать диалог и вернуть выбранный ключ режима."""
         self.mainloop()
-        return self._selected or "research"
+        return self._selected or "rl_flat"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
