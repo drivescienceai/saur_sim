@@ -1,19 +1,27 @@
 """
-ptp_parser.py — Парсер планов тушения пожаров (ПТП) из документов Word.
+ptp_parser.py — Парсер описаний реальных пожаров из документов Word.
 ═══════════════════════════════════════════════════════════════════════════════
-Извлекает структурированные данные из .docx-файлов ПТП для загрузки
-в симулятор САУР-ПСП.
+Извлекает структурированные данные из .docx-файлов с описаниями
+реальных пожаров на резервуарах для загрузки в симулятор САУР-ПСП.
 
-Парсер использует нечёткий поиск по ключевым словам, заголовкам и таблицам.
-Поддерживает различные форматы ПТП (ВНИИПО, региональные, ведомственные).
+Отличие от планов тушения (ПТП):
+  ПТП — расчётные параметры ДО пожара (нормативы, типовые схемы).
+  Описание реального пожара — хронология ПОСЛЕ пожара: что произошло,
+  какие решения принял РТП, какие были сбои, как развивалась обстановка.
 
-Извлекаемые данные:
+Для обучения агентов ОП ценны именно описания реальных пожаров, потому что
+они содержат ТРАЕКТОРИИ РЕШЕНИЙ — последовательности (состояние → действие),
+которые являются обучающими данными для IRL, клонирования поведения,
+обучения по предпочтениям.
+
+Парсер извлекает:
   - Параметры объекта (тип РВС, объём, диаметр, топливо, кровля)
   - Ранг пожара
-  - Хронология событий с временны́ми метками
-  - Силы и средства (техника, стволы, ПНС)
-  - Пенные атаки (число, исход)
-  - Итог (локализован, ликвидирован, время)
+  - Хронологию с решениями РТП (Ч+N: кто, что сделал, результат)
+  - Силы и средства (техника, стволы, ПНС, личный состав)
+  - Пенные атаки (число, исход, причины неудач)
+  - Инциденты (розливы, вторичные очаги, отказы техники)
+  - Итог (локализован, ликвидирован, время, потери)
 ═══════════════════════════════════════════════════════════════════════════════
 """
 from __future__ import annotations
@@ -80,7 +88,22 @@ class ParsedScenario:
     # Пенные атаки
     foam_attacks_total: int = 0
     foam_attacks_successful: int = 0
+    foam_attack_details: List[Dict] = field(default_factory=list)
+    # [{"t_min": 340, "result": "неудача", "reason": "выход из строя ППП"}, ...]
     foam_type: str = ""    # тип пенообразователя
+
+    # Инциденты (розливы, вторичные очаги, отказы)
+    incidents: List[Dict] = field(default_factory=list)
+    # [{"t_min": 557, "type": "розлив", "description": "300 м²"}, ...]
+
+    # Решения РТП (для ОП: траектория действий эксперта)
+    rtp_decisions: List[Dict] = field(default_factory=list)
+    # [{"t_min": 12, "rtp": "РТП-1", "action": "создан штаб", "phase": "S2"}, ...]
+
+    # Потери
+    casualties_personnel: int = 0   # пострадавшие среди ЛС
+    casualties_civilian: int = 0    # пострадавшие гражданские
+    material_damage: str = ""       # описание материального ущерба
 
     # Нормативные данные (если указаны)
     foam_intensity_norm: float = 0.0    # л/(с·м²)
@@ -174,6 +197,39 @@ _RE_EQUIPMENT = {
     "ПНС": re.compile(r'(?:ПНС|насосн(?:ая|ой)\s*станц)[\s-]*(\d+)?', re.IGNORECASE),
     "АЛ": re.compile(r'(?:АЛ|АКП|автолестн|автоколенч)[\s-]*(\d+)?', re.IGNORECASE),
 }
+
+# Паттерны для описаний РЕАЛЬНЫХ пожаров (не ПТП)
+_RE_RTP = re.compile(
+    r'РТП[-\s]*(\d+)?|руководител[ья]\s*тушения', re.IGNORECASE)
+
+_RE_FOAM_FAIL = re.compile(
+    r'(?:прекращен|неудач|отказ|выход\s*из\s*строя|разрушен)',
+    re.IGNORECASE)
+
+_RE_FOAM_SUCCESS = re.compile(
+    r'(?:горение\s*(?:отсутствует|прекратил)|ликвидирован[оа]?\s*горен|'
+    r'успешн)',
+    re.IGNORECASE)
+
+_RE_INCIDENT = re.compile(
+    r'(?:свищ|розлив|выброс|взрыв|обрушен|вторичн|загоран|воспламен|'
+    r'отказ|авари)',
+    re.IGNORECASE)
+
+_RE_SHTAB = re.compile(
+    r'(?:штаб|ОШ|оперативн\w*\s*штаб)', re.IGNORECASE)
+
+_RE_BU = re.compile(
+    r'(?:БУ|боев\w*\s*участ)', re.IGNORECASE)
+
+_RE_STVOL = re.compile(
+    r'(?:ствол|Антенор|Муссон|ГПС|ЛС-С|лафетн|РС-\d)', re.IGNORECASE)
+
+_RE_DECISION_KEYWORDS = re.compile(
+    r'(?:принял\s*руководств|назначен|создан|установлен|подан[ыо]?\s*ствол|'
+    r'направлен|вызван|запрошен|объявлен|сформирован|развёрнут|'
+    r'принял\s*решен|организован)',
+    re.IGNORECASE)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -294,11 +350,23 @@ class PTPParser:
             result.total_duration_min = max(
                 (ev.t_min for ev in timeline), default=300)
 
-        # ── Пенные атаки ──────────────────────────────────────────────────
-        foam_matches = _RE_FOAM_ATTACK.findall(all_text)
-        result.foam_attacks_total = len(foam_matches)
+        # ── Пенные атаки с деталями ───────────────────────────────────────
+        result.foam_attack_details = self._parse_foam_attacks(all_text, timeline)
+        result.foam_attacks_total = len(result.foam_attack_details)
+        result.foam_attacks_successful = sum(
+            1 for fa in result.foam_attack_details if fa["result"] == "успех")
         if result.foam_attacks_total > 0:
+            quality_points += 1
+
+        # ── Инциденты (розливы, отказы, вторичные очаги) ───────────────────
+        result.incidents = self._parse_incidents(timeline)
+        if result.incidents:
             quality_points += 0.5
+
+        # ── Решения РТП (траектория действий эксперта) ─────────────────────
+        result.rtp_decisions = self._parse_decisions(timeline)
+        if len(result.rtp_decisions) >= 3:
+            quality_points += 1
 
         # ── Локализация и ликвидация ──────────────────────────────────────
         if _RE_LOCALIZED.search(all_text):
@@ -329,6 +397,159 @@ class PTPParser:
 
         result.parse_quality = min(1.0, quality_points / max_points)
         return result
+
+    def _parse_foam_attacks(self, text: str,
+                            timeline: List[TimelineEvent]) -> List[Dict]:
+        """Извлечь детали пенных атак с результатами."""
+        attacks = []
+        for ev in timeline:
+            if not _RE_FOAM_ATTACK.search(ev.description):
+                continue
+            result = "неизвестно"
+            reason = ""
+            # Искать исход в текущем и следующих событиях
+            desc_lower = ev.description.lower()
+            if _RE_FOAM_SUCCESS.search(desc_lower):
+                result = "успех"
+            elif _RE_FOAM_FAIL.search(desc_lower):
+                result = "неудача"
+                # Причина неудачи
+                if "каркас" in desc_lower or "крыш" in desc_lower:
+                    reason = "препятствие каркаса крыши"
+                elif "выход из строя" in desc_lower or "отказ" in desc_lower:
+                    reason = "отказ техники"
+                elif "разрушен" in desc_lower:
+                    reason = "разрушение пены"
+                else:
+                    reason = "не указана"
+            attacks.append({
+                "t_min": ev.t_min,
+                "description": ev.description,
+                "result": result,
+                "reason": reason,
+            })
+
+        # Проверить следующие события на результат атаки
+        for i, atk in enumerate(attacks):
+            if atk["result"] == "неизвестно":
+                # Искать в следующих событиях хронологии
+                for ev in timeline:
+                    if ev.t_min > atk["t_min"] and ev.t_min <= atk["t_min"] + 30:
+                        if _RE_FOAM_FAIL.search(ev.description):
+                            attacks[i]["result"] = "неудача"
+                            break
+                        elif _RE_FOAM_SUCCESS.search(ev.description):
+                            attacks[i]["result"] = "успех"
+                            break
+
+        return attacks
+
+    def _parse_incidents(self, timeline: List[TimelineEvent]) -> List[Dict]:
+        """Извлечь инциденты (розливы, отказы, вторичные очаги)."""
+        incidents = []
+        for ev in timeline:
+            if _RE_INCIDENT.search(ev.description):
+                inc_type = "прочее"
+                lower = ev.description.lower()
+                if "розлив" in lower or "свищ" in lower:
+                    inc_type = "розлив"
+                elif "вторичн" in lower or "загоран" in lower or "воспламен" in lower:
+                    inc_type = "вторичный очаг"
+                elif "отказ" in lower or "выход из строя" in lower or "авари" in lower:
+                    inc_type = "отказ техники"
+                elif "выброс" in lower or "взрыв" in lower:
+                    inc_type = "выброс/взрыв"
+                elif "обрушен" in lower:
+                    inc_type = "обрушение"
+                incidents.append({
+                    "t_min": ev.t_min,
+                    "type": inc_type,
+                    "description": ev.description,
+                })
+        return incidents
+
+    def _parse_decisions(self, timeline: List[TimelineEvent]) -> List[Dict]:
+        """Извлечь решения РТП из хронологии (траектория эксперта для ОП)."""
+        decisions = []
+        current_rtp = "РТП-1"
+
+        for ev in timeline:
+            # Смена РТП
+            m_rtp = _RE_RTP.search(ev.description)
+            if m_rtp and "принял" in ev.description.lower():
+                num = m_rtp.group(1)
+                if num:
+                    current_rtp = f"РТП-{num}"
+
+            # Проверить: содержит ли событие решение
+            if not _RE_DECISION_KEYWORDS.search(ev.description):
+                continue
+
+            # Определить тип действия (маппинг на 15 действий симулятора)
+            action_code = self._classify_action(ev.description)
+
+            # Определить фазу по времени (эвристика)
+            phase = self._estimate_phase(ev.t_min)
+
+            decisions.append({
+                "t_min": ev.t_min,
+                "rtp": current_rtp,
+                "description": ev.description,
+                "action_code": action_code,
+                "phase": phase,
+            })
+
+        return decisions
+
+    @staticmethod
+    def _classify_action(desc: str) -> str:
+        """Классифицировать описание события → код действия (С1..О6)."""
+        lower = desc.lower()
+        if any(w in lower for w in ["спасен", "эвакуац"]):
+            return "С1"
+        if any(w in lower for w in ["защит", "охлажд"] + ["соседн"]):
+            if "соседн" in lower:
+                return "О2"
+            return "С2"
+        if "локализ" in lower:
+            return "С3"
+        if any(w in lower for w in ["пенн", "подач", "пен"]) and "атак" in lower:
+            return "О3"
+        if "вскипан" in lower or "выброс" in lower:
+            return "С5"
+        if any(w in lower for w in ["штаб", "ОШ", "боев"] + ["участ"]):
+            if "участ" in lower or "БУ" in lower:
+                return "Т1"
+            return "Т1"
+        if "перегруп" in lower or "переназнач" in lower:
+            return "Т2"
+        if any(w in lower for w in ["запрос", "вызов", "вызван", "направлен"]):
+            return "Т3"
+        if any(w in lower for w in ["ПНС", "насосн", "водоисточн", "установлен"]):
+            return "Т4"
+        if any(w in lower for w in ["ствол", "подан", "Антенор", "лафетн"]):
+            return "О1"
+        if any(w in lower for w in ["разведк", "уточн", "обследован"]):
+            return "О4"
+        if "розлив" in lower and ("ликвид" in lower or "тушен" in lower):
+            return "О5"
+        if any(w in lower for w in ["отход", "вывод", "отступ"]):
+            return "О6"
+        return "О4"  # по умолчанию — разведка
+
+    @staticmethod
+    def _estimate_phase(t_min: int) -> str:
+        """Эвристическая оценка фазы пожара по времени."""
+        if t_min <= 5:
+            return "S1"
+        elif t_min <= 30:
+            return "S2"
+        elif t_min <= 300:
+            return "S3"
+        elif t_min <= 600:
+            return "S4"
+        else:
+            return "S5"
 
     def _extract_all_text(self, doc) -> str:
         """Собрать весь текст документа (абзацы + таблицы)."""
