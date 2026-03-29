@@ -1277,7 +1277,7 @@ class ModeSelectDialog(tk.Tk):
              "Спирмен), дисперсионный анализ (ANOVA/Краскел-Уоллис, η²), "
              "множественная регрессия (R², F-тест), подгонка распределений "
              "(Шапиро-Уилк, Вейбулл K-S). 4 типа визуализации.",
-             self._run_stat_analysis),
+             self._open_stat_window),
 
             ("📈", "Анализ\nвременных рядов",
              "ACF/PACF, CUSUM, Байес,\nспектральный анализ, разладки",
@@ -1287,7 +1287,7 @@ class ModeSelectDialog(tk.Tk):
              "и байесовский метод — формальный критерий момента адаптации. "
              "Байесовская оценка параметров с априорным/апостериорным "
              "распределением. Скользящие статистики.",
-             self._run_timeseries),
+             self._open_timeseries_window),
 
             ("⛓", "Марковские\nмодели",
              "Полумарковская цепь,\nВейбулл, калибровка, переходы",
@@ -1297,7 +1297,7 @@ class ModeSelectDialog(tk.Tk):
              "на реальных данных (N=300+) с бутстреп 95% ДИ. Матрица "
              "переходных вероятностей. Стационарное распределение. "
              "3 визуализации: подгонки, матрица, сравнение.",
-             self._run_calibration),
+             self._open_markov_window),
 
             ("🔧", "Экспертная система\nи прецеденты",
              "27 правил БУПО, CBR,\nкластеры, k-NN классификатор",
@@ -1307,7 +1307,7 @@ class ModeSelectDialog(tk.Tk):
              "K-Means кластеризация (4 кластера), классификатор ситуаций "
              "(8 типов). Поиск ближайших прецедентов для СППР: "
              "«в аналогичном случае РТП выбрал действие X».",
-             self._run_precedents),
+             self._open_expert_window),
 
             ("🤖", "Обучение с\nподкреплением",
              "10 режимов: от имитации\nдо мультиагентного ОП",
@@ -1433,6 +1433,35 @@ class ModeSelectDialog(tk.Tk):
 
         card.bind("<Enter>", _enter)
         card.bind("<Leave>", _leave)
+
+    # ── Открытие полноценных окон для 4 блоков ──────────────────────────
+    def _open_stat_window(self):
+        try:
+            from research_windows import StatWindow
+            StatWindow(self)
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _open_timeseries_window(self):
+        try:
+            from research_windows import TimeseriesWindow
+            TimeseriesWindow(self)
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _open_markov_window(self):
+        try:
+            from research_windows import MarkovWindow
+            MarkovWindow(self)
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
+
+    def _open_expert_window(self):
+        try:
+            from research_windows import ExpertCBRWindow
+            ExpertCBRWindow(self)
+        except Exception as e:
+            self._tool_message("Ошибка", str(e))
 
     # ── Подменю RL (10 режимов) ──────────────────────────────────────────
     def _open_rl_submenu(self):
