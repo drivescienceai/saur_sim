@@ -28,22 +28,22 @@ from typing import List, Dict, Optional, Tuple, Any
 # ЦВЕТОВАЯ ПАЛИТРА (согласована с tank_fire_sim.py)
 # ══════════════════════════════════════════════════════════════════════════════
 P = dict(
-    bg="#1a1f2e", panel="#1e2535", panel2="#232c40", canvas="#0d1420",
+    bg="#f5f6fa", panel="#ffffff", panel2="#eef0f4", canvas="#f0f2f8",
     fire="#ff4500", fire2="#ff8c00",
     rvs_burning="#c0392b", rvs_neighbor="#2471a3",
     water="#00aaff", foam="#90ee90",
-    building="#4a4a6a", ground="#1a3322",
-    hydrant="#1abc9c", river="#1a5276",
+    building="#95a5a6", ground="#a8d5a2",
+    hydrant="#1abc9c", river="#85c1e9",
     success="#27ae60", warn="#e67e22", danger="#c0392b", info="#2980b9",
-    text="#ecf0f1", text2="#95a5a6", hi="#f1c40f",
-    grid="#2c3e50", accent="#e67e22",
-    select="#f1c40f",          # контур выбранного объекта
-    ghost="#ffffff44",         # полупрозрачный «призрак» при размещении
-    toolbar_btn="#232c40",
+    text="#2c3e50", text2="#7f8c8d", hi="#c0392b",
+    grid="#d5d8dc", accent="#e67e22",
+    select="#c0392b",          # контур выбранного объекта
+    ghost="#00000022",         # полупрозрачный «призрак» при размещении
+    toolbar_btn="#eef0f4",
     toolbar_active="#e67e22",
 )
 
-ED_W, ED_H = 580, 460   # размер холста редактора
+ED_W, ED_H = 700, 540   # размер холста редактора (увеличен)
 GRID_SIZE   = 20        # шаг сетки привязки (пиксели)
 
 # Типы объектов
@@ -986,11 +986,16 @@ class ScenarioEditorApp(tk.Toplevel):
         }
 
     def _save_json(self):
+        # По умолчанию сохранять в папку пользовательских сценариев
+        _user_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                 "data", "scenarios_user")
+        os.makedirs(_user_dir, exist_ok=True)
         path = filedialog.asksaveasfilename(
             parent=self,
-            title="Сохранить сценарий",
+            title="Сохранить пользовательский сценарий",
             defaultextension=".json",
             filetypes=[("JSON сценарий", "*.json"), ("Все файлы", "*.*")],
+            initialdir=_user_dir,
             initialfile=f"{self._p_name.get()}.json",
         )
         if not path:

@@ -30,7 +30,7 @@ except ImportError:
 
 
 _DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-_SCENARIOS_DIR = os.path.join(_DATA_DIR, "scenarios")
+_SCENARIOS_DIR = os.path.join(_DATA_DIR, "scenarios_real")
 _DB_PATH = os.path.join(_DATA_DIR, "scenario_db.json")
 _REPORT_PATH = os.path.join(_DATA_DIR, "import_report.json")
 
