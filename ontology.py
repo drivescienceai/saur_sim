@@ -468,6 +468,518 @@ class FireOntology:
 # ═══════════════════════════════════════════════════════════════════════════
 # ДЕМО
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# ОНТОЛОГИЧЕСКИЙ АНАЛИЗ ДЛЯ СППР
+# ═══════════════════════════════════════════════════════════════════════════
+@dataclass
+class OntologyAnalysisResult:
+    """Полный результат онтологического анализа."""
+    # Покрытие
+    norm_coverage: float = 0.0        # доля действий с нормативным обоснованием
+    uncovered_actions: List[str] = field(default_factory=list)
+    # Достижимость
+    reachability: Dict[str, float] = field(default_factory=dict)
+    # Критичность
+    criticality: Dict[str, float] = field(default_factory=dict)
+    bottlenecks: List[str] = field(default_factory=list)
+    # Предусловия
+    preconditions: Dict[str, List[str]] = field(default_factory=dict)
+    # Паттерны
+    decision_entropy: Dict[str, float] = field(default_factory=dict)
+    # Соответствие
+    compliance_index: float = 0.0
+    violations: List[Dict] = field(default_factory=list)
+    # Рекомендации СППР
+    recommendations: List[Dict] = field(default_factory=list)
+
+
+class OntologyAnalyzer:
+    """Анализ онтологии для поддержки принятия решений."""
+
+    def __init__(self, ontology: FireOntology):
+        self.onto = ontology
+        self._adj: Optional[Dict[str, Set[str]]] = None
+        self._build_adjacency()
+
+    def _build_adjacency(self):
+        """Построить граф смежности из отношений."""
+        self._adj = {}
+        for r in self.onto.relations:
+            self._adj.setdefault(r.subject, set()).add(r.object)
+            self._adj.setdefault(r.object, set()).add(r.subject)
+
+    # ── 1. Покрытие нормативной базы ─────────────────────────────
+    def norm_coverage(self) -> Tuple[float, List[str]]:
+        """Доля действий, имеющих нормативное обоснование.
+
+        Действие покрыто, если существует путь:
+          действие → (включает/применяется_в) → фаза → ... → норматив
+        или действие упоминается в правиле.
+        """
+        actions = [e for e in self.onto.entities.values()
+                   if e.entity_type == EntityType.ACTION]
+        norms = {e.id for e in self.onto.entities.values()
+                 if e.entity_type == EntityType.NORM}
+        rules_text = " ".join(r.conclusion + " " + r.condition
+                              for r in self.onto.rules)
+
+        covered = []
+        uncovered = []
+        for action in actions:
+            # Проверить: упоминается ли в правилах
+            action_code = action.name.split()[0]  # "С1", "О3" и т.д.
+            if action_code in rules_text or action.id in rules_text:
+                covered.append(action.id)
+                continue
+
+            # Проверить: есть ли путь до норматива через граф
+            reachable = self._bfs_reachable(action.id, max_depth=4)
+            if reachable & norms:
+                covered.append(action.id)
+            else:
+                uncovered.append(action.name)
+
+        rate = len(covered) / max(len(actions), 1)
+        return rate, uncovered
+
+    def _bfs_reachable(self, start: str, max_depth: int = 4) -> Set[str]:
+        """BFS: все достижимые узлы из start за max_depth шагов."""
+        visited = set()
+        queue = [(start, 0)]
+        while queue:
+            node, depth = queue.pop(0)
+            if node in visited or depth > max_depth:
+                continue
+            visited.add(node)
+            for neighbor in self._adj.get(node, set()):
+                queue.append((neighbor, depth + 1))
+        return visited
+
+    # ── 2. Достижимость цели ─────────────────────────────────────
+    def goal_reachability(self, current_resources: Dict[str, bool]
+                          ) -> Dict[str, float]:
+        """Индекс достижимости каждого действия при текущих ресурсах.
+
+        current_resources: {"pns": True, "pena": False, "voda": True, ...}
+        Возвращает: {"О3 Пенная атака": 0.33, "О1 Подача ствола": 1.0, ...}
+        """
+        actions = [e for e in self.onto.entities.values()
+                   if e.entity_type == EntityType.ACTION]
+
+        # Предусловия каждого действия (через отношения)
+        action_prereqs = {
+            "a_o3": ["pena", "pns", "voda", "stvol"],  # Пенная атака
+            "a_o1": ["voda", "stvol"],                   # Подача ствола
+            "a_o2": ["voda", "stvol"],                   # Охлаждение
+            "a_t4": ["pns", "vodoist"],                  # Установить ПНС
+            "a_s4": ["pena", "pns", "voda"],             # Ликвидация
+            "a_o5": ["voda", "stvol"],                   # Розлив
+            "a_t3": [],                                   # Вызов сил — всегда доступно
+            "a_o4": [],                                   # Разведка — всегда
+            "a_o6": [],                                   # Отход — всегда
+        }
+
+        result = {}
+        for action in actions:
+            prereqs = action_prereqs.get(action.id, [])
+            if not prereqs:
+                result[action.name] = 1.0
+            else:
+                satisfied = sum(1 for p in prereqs
+                                if current_resources.get(p, False))
+                result[action.name] = satisfied / len(prereqs)
+        return result
+
+    # ── 3. Критичность ресурсов ──────────────────────────────────
+    def resource_criticality(self) -> Dict[str, float]:
+        """Betweenness centrality каждого ресурса в онтографе.
+
+        Чем выше — тем больше путей проходит через ресурс.
+        Удаление критического ресурса разрывает больше связей.
+        """
+        resources = [e for e in self.onto.entities.values()
+                     if e.entity_type == EntityType.RESOURCE]
+        all_ids = list(self.onto.entities.keys())
+        n = len(all_ids)
+        id_to_idx = {eid: i for i, eid in enumerate(all_ids)}
+
+        # Матрица смежности
+        adj = np.zeros((n, n))
+        for r in self.onto.relations:
+            if r.subject in id_to_idx and r.object in id_to_idx:
+                i, j = id_to_idx[r.subject], id_to_idx[r.object]
+                adj[i, j] = 1
+                adj[j, i] = 1
+
+        # Floyd-Warshall
+        dist = np.where(adj > 0, 1, np.inf)
+        np.fill_diagonal(dist, 0)
+        for k in range(n):
+            for i in range(n):
+                for j in range(n):
+                    if dist[i, k] + dist[k, j] < dist[i, j]:
+                        dist[i, j] = dist[i, k] + dist[k, j]
+
+        # Betweenness
+        between = np.zeros(n)
+        for s in range(n):
+            for t in range(s + 1, n):
+                if dist[s, t] == np.inf:
+                    continue
+                for v in range(n):
+                    if v != s and v != t:
+                        if abs(dist[s, v] + dist[v, t] - dist[s, t]) < 0.5:
+                            between[v] += 1
+
+        norm = max(1, (n - 1) * (n - 2) / 2)
+        result = {}
+        for res in resources:
+            idx = id_to_idx.get(res.id, -1)
+            if idx >= 0:
+                result[res.name] = round(float(between[idx] / norm), 4)
+
+        return dict(sorted(result.items(), key=lambda x: -x[1]))
+
+    # ── 4. Цепочки предусловий ───────────────────────────────────
+    def precondition_chains(self) -> Dict[str, List[str]]:
+        """Цепочки зависимостей для каждого действия.
+
+        «Чтобы выполнить О3 (пенная атака), нужно:
+         вода → ПНС → пена → ствол → атака»
+        """
+        chains = {
+            "О3 Пенная атака": [
+                "Водоисточник доступен",
+                "ПНС установлена на водоисточник",
+                "Запас пенообразователя достаточен",
+                "Стволы поданы на охлаждение (≥3)",
+                "Готовность к пенной атаке подтверждена",
+            ],
+            "О1 Подача ствола": [
+                "Водоисточник доступен",
+                "АЦ/ПНС на водоисточнике",
+                "Магистральная линия проложена",
+            ],
+            "Т1 Создать БУ": [
+                "РТП прибыл и оценил обстановку",
+                "Определены секторы (юг/восток/запад)",
+                "Назначены НБУ",
+            ],
+            "С4 Ликвидация": [
+                "Все предусловия О3 выполнены",
+                "Все БУ готовы",
+                "НТ обеспечил бесперебойное водоснабжение",
+                "РТП принял решение о пенной атаке",
+            ],
+        }
+        return chains
+
+    # ── 5. Энтропия решений по фазам ─────────────────────────────
+    def decision_entropy_by_phase(self,
+                                   scenario_decisions: List[Dict] = None
+                                   ) -> Dict[str, float]:
+        """Энтропия Шеннона распределения действий по фазам.
+
+        Высокая энтропия = высокая неопределённость выбора.
+        Низкая = действие предопределено.
+        """
+        phases = ["S1", "S2", "S3", "S4", "S5"]
+
+        if scenario_decisions:
+            # Из реальных данных
+            phase_actions = {p: {} for p in phases}
+            for d in scenario_decisions:
+                p = d.get("phase", "S3")
+                a = d.get("action_code", "О4")
+                phase_actions.setdefault(p, {})
+                phase_actions[p][a] = phase_actions[p].get(a, 0) + 1
+        else:
+            # Из онтологии (какие действия допустимы в каждой фазе)
+            phase_actions = {}
+            for p_id in ["s1", "s2", "s3", "s4", "s5"]:
+                p_name = p_id.upper()
+                related = self.onto.get_related(p_id, "включает")
+                phase_actions[p_name] = {
+                    self.onto.entities[r].name: 1
+                    for r in related
+                    if r in self.onto.entities
+                }
+
+        result = {}
+        for phase, actions in phase_actions.items():
+            if not actions:
+                result[phase] = 0.0
+                continue
+            total = sum(actions.values())
+            probs = np.array([v / total for v in actions.values()])
+            probs = probs[probs > 0]
+            result[phase] = round(float(-np.sum(probs * np.log2(probs))), 3)
+        return result
+
+    # ── 6. Проверка соответствия правилам ────────────────────────
+    def check_compliance(self, state: Dict) -> Tuple[float, List[Dict]]:
+        """Проверить: какие правила онтологии нарушены при текущем состоянии.
+
+        state: {"phase": "S3", "has_shtab": False, "n_trunks": 2,
+                "foam_ready": False, "risk": 0.6, ...}
+        """
+        violations = []
+        total_rules = len(self.onto.rules)
+        passed = 0
+
+        for rule in self.onto.rules:
+            violated = False
+            reason = ""
+
+            if rule.id == "r2" and state.get("phase") in ("S2", "S3", "S4"):
+                if state.get("n_trunks_nbr", 0) == 0:
+                    violated = True
+                    reason = "Соседний РВС не охлаждается"
+
+            elif rule.id == "r5" and state.get("fire_rank", 0) >= 2:
+                if not state.get("has_shtab", False):
+                    violated = True
+                    reason = "Штаб не создан при ранге ≥2"
+
+            elif rule.id == "r7" and state.get("risk", 0) > 0.85:
+                if state.get("last_action") != 14:  # О6
+                    violated = True
+                    reason = "Риск > 0.85, но сигнал отхода не дан"
+
+            if violated:
+                violations.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "source": rule.source,
+                    "reason": reason,
+                })
+            else:
+                passed += 1
+
+        compliance = passed / max(total_rules, 1)
+        return compliance, violations
+
+    # ── 7. Генерация рекомендаций СППР ───────────────────────────
+    def generate_recommendations(self, state: Dict) -> List[Dict]:
+        """Сгенерировать рекомендации на основе онтологии.
+
+        state: текущее состояние симуляции
+        """
+        recs = []
+        phase = state.get("phase", "S1")
+        risk = state.get("risk", 0)
+        foam_ready = state.get("foam_ready", False)
+        has_shtab = state.get("has_shtab", False)
+        n_trunks = state.get("n_trunks_burn", 0)
+        n_pns = state.get("n_pns", 0)
+        rank = state.get("fire_rank", 2)
+
+        # Проверка предусловий
+        if phase in ("S3", "S4") and not foam_ready:
+            missing = []
+            if n_pns == 0:
+                missing.append("ПНС не установлена (Т4)")
+            if n_trunks < 3:
+                missing.append(f"Стволов {n_trunks} < 3 (О1)")
+            if missing:
+                recs.append({
+                    "priority": "высокий",
+                    "action": "Подготовка к пенной атаке",
+                    "reason": f"Пенная атака невозможна: {'; '.join(missing)}",
+                    "rule": "r3 (ГОСТ Р 51043-2002)",
+                })
+
+        if rank >= 2 and not has_shtab:
+            recs.append({
+                "priority": "высокий",
+                "action": "Создать оперативный штаб (Т1)",
+                "reason": f"Ранг пожара №{rank} ≥ 2, штаб не создан",
+                "rule": "r5 (БУПО §5.1)",
+            })
+
+        if risk > 0.75:
+            recs.append({
+                "priority": "критический",
+                "action": "Рассмотреть сигнал отхода (О6)",
+                "reason": f"Индекс риска {risk:.2f} > 0.75",
+                "rule": "r7 (БУПО §3.12)",
+            })
+
+        if phase == "S2" and n_trunks < 3:
+            recs.append({
+                "priority": "средний",
+                "action": f"Подать стволы на охлаждение (О1): {n_trunks}/3",
+                "reason": "Недостаточное охлаждение горящего РВС",
+                "rule": "r2 (СП 155 §9.3)",
+            })
+
+        if phase == "S1":
+            recs.append({
+                "priority": "средний",
+                "action": "Провести разведку (О4)",
+                "reason": "Фаза S1: необходимо оценить обстановку",
+                "rule": "r1 (БУПО §3.1)",
+            })
+
+        # Онтологический вывод: достижимость
+        resources = {
+            "pns": n_pns > 0,
+            "voda": n_pns > 0 or n_trunks > 0,
+            "pena": state.get("foam_conc", 0) > 0,
+            "stvol": n_trunks > 0,
+            "vodoist": True,
+        }
+        reachability = self.goal_reachability(resources)
+        low_reach = [(name, val) for name, val in reachability.items()
+                     if val < 0.5 and val > 0]
+        if low_reach:
+            for name, val in low_reach[:2]:
+                recs.append({
+                    "priority": "информационный",
+                    "action": f"{name}: достижимость {val:.0%}",
+                    "reason": "Не все предусловия выполнены",
+                    "rule": "Онтологический вывод",
+                })
+
+        return sorted(recs, key=lambda r: {"критический": 0, "высокий": 1,
+                                            "средний": 2, "информационный": 3
+                                            }.get(r["priority"], 9))
+
+    # ── 8. Полный анализ ─────────────────────────────────────────
+    def full_analysis(self, state: Optional[Dict] = None
+                      ) -> OntologyAnalysisResult:
+        """Провести полный онтологический анализ."""
+        result = OntologyAnalysisResult()
+
+        # 1. Покрытие
+        result.norm_coverage, result.uncovered_actions = self.norm_coverage()
+
+        # 2. Достижимость
+        if state:
+            resources = {
+                "pns": state.get("n_pns", 0) > 0,
+                "voda": state.get("n_pns", 0) > 0,
+                "pena": state.get("foam_conc", 0) > 0,
+                "stvol": state.get("n_trunks_burn", 0) > 0,
+                "vodoist": True,
+            }
+            result.reachability = self.goal_reachability(resources)
+
+        # 3. Критичность
+        result.criticality = self.resource_criticality()
+        result.bottlenecks = [name for name, val in result.criticality.items()
+                              if val > 0.01][:3]
+
+        # 4. Предусловия
+        result.preconditions = self.precondition_chains()
+
+        # 5. Энтропия
+        result.decision_entropy = self.decision_entropy_by_phase()
+
+        # 6. Соответствие
+        if state:
+            result.compliance_index, result.violations = \
+                self.check_compliance(state)
+
+        # 7. Рекомендации
+        if state:
+            result.recommendations = self.generate_recommendations(state)
+
+        return result
+
+
+def plot_ontology_analysis(result: OntologyAnalysisResult,
+                           filename: str = "ontology_analysis.png") -> str:
+    """Визуализация результатов онтологического анализа."""
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9), facecolor="white")
+
+    # 1. Покрытие нормативной базы
+    ax = axes[0, 0]
+    covered = result.norm_coverage
+    ax.barh(["Покрыто", "Не покрыто"],
+            [covered, 1 - covered],
+            color=["#27ae60", "#c0392b"], edgecolor="white")
+    ax.set_xlim(0, 1)
+    ax.set_title(f"Нормативное покрытие: {covered:.0%}", fontweight="bold")
+    ax.set_xlabel("Доля действий")
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 2. Критичность ресурсов
+    ax = axes[0, 1]
+    if result.criticality:
+        names = list(result.criticality.keys())[:8]
+        vals = [result.criticality[n] for n in names]
+        short = [n.split("(")[0].strip()[:15] for n in names]
+        ax.barh(range(len(short)), vals, color="#e67e22", edgecolor="white")
+        ax.set_yticks(range(len(short)))
+        ax.set_yticklabels(short, fontsize=8)
+        ax.set_xlabel("Центральность (betweenness)")
+    ax.set_title("Критичность ресурсов", fontweight="bold")
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 3. Энтропия решений по фазам
+    ax = axes[0, 2]
+    if result.decision_entropy:
+        phases = list(result.decision_entropy.keys())
+        entropy = list(result.decision_entropy.values())
+        colors = ["#3498db" if e < 1.5 else "#e67e22" if e < 2.5
+                  else "#c0392b" for e in entropy]
+        ax.bar(phases, entropy, color=colors, edgecolor="white")
+        ax.set_ylabel("Энтропия (бит)")
+    ax.set_title("Неопределённость решений по фазам", fontweight="bold")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # 4. Достижимость действий
+    ax = axes[1, 0]
+    if result.reachability:
+        names = list(result.reachability.keys())
+        vals = list(result.reachability.values())
+        short = [n.split()[0][:6] for n in names]
+        colors = ["#27ae60" if v >= 0.8 else "#e67e22" if v >= 0.5
+                  else "#c0392b" for v in vals]
+        ax.barh(range(len(short)), vals, color=colors, edgecolor="white")
+        ax.set_yticks(range(len(short)))
+        ax.set_yticklabels(short, fontsize=7)
+        ax.set_xlim(0, 1.1)
+        ax.set_xlabel("Достижимость (0–1)")
+    ax.set_title("Достижимость действий", fontweight="bold")
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 5. Соответствие правилам
+    ax = axes[1, 1]
+    if result.compliance_index > 0 or result.violations:
+        n_ok = int(result.compliance_index * 7)
+        n_viol = len(result.violations)
+        ax.pie([n_ok, n_viol], labels=[f"Соблюдены ({n_ok})",
+               f"Нарушены ({n_viol})"],
+               colors=["#27ae60", "#c0392b"], autopct="%1.0f%%",
+               textprops={"fontsize": 9})
+    ax.set_title(f"Соответствие: {result.compliance_index:.0%}", fontweight="bold")
+
+    # 6. Рекомендации
+    ax = axes[1, 2]
+    ax.axis("off")
+    if result.recommendations:
+        lines = ["Рекомендации СППР:", ""]
+        prio_colors = {"критический": "🔴", "высокий": "🟠",
+                       "средний": "🟡", "информационный": "🔵"}
+        for rec in result.recommendations[:5]:
+            icon = prio_colors.get(rec["priority"], "⚪")
+            lines.append(f"{icon} [{rec['priority']}]")
+            lines.append(f"   {rec['action']}")
+            lines.append(f"   {rec['reason'][:50]}")
+            lines.append("")
+        ax.text(0.05, 0.95, "\n".join(lines), transform=ax.transAxes,
+                fontsize=8, va="top", fontfamily="monospace",
+                bbox=dict(boxstyle="round", facecolor="#f5f6fa"))
+    ax.set_title("Рекомендации", fontweight="bold")
+
+    fig.suptitle("Онтологический анализ для СППР", fontsize=13,
+                 fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    return _save(fig, filename)
+
+
 if __name__ == "__main__":
     import sys, io
     if sys.platform == "win32":
@@ -498,3 +1010,43 @@ if __name__ == "__main__":
 
     graph_path = onto.plot_ontology_graph()
     print(f"Граф: {graph_path}")
+
+    # Онтологический анализ
+    analyzer = OntologyAnalyzer(onto)
+
+    # Состояние: фаза S3, мало ресурсов
+    state = {
+        "phase": "S3", "fire_rank": 4, "risk": 0.65,
+        "has_shtab": True, "n_trunks_burn": 2, "n_trunks_nbr": 0,
+        "n_pns": 1, "foam_conc": 5.0, "foam_ready": False,
+        "last_action": 9,
+    }
+
+    result = analyzer.full_analysis(state)
+    print(f"\nОнтологический анализ:")
+    print(f"  Покрытие нормативной базы: {result.norm_coverage:.0%}")
+    if result.uncovered_actions:
+        print(f"  Непокрытые: {result.uncovered_actions[:5]}")
+    print(f"  Индекс соответствия: {result.compliance_index:.0%}")
+    if result.violations:
+        print(f"  Нарушения:")
+        for v in result.violations:
+            print(f"    {v['rule_id']}: {v['reason']} ({v['source']})")
+    print(f"  Энтропия решений: {result.decision_entropy}")
+    print(f"  Узкие места: {result.bottlenecks[:3]}")
+
+    print(f"\n  Рекомендации СППР:")
+    for rec in result.recommendations:
+        print(f"    [{rec['priority']}] {rec['action']}")
+        print(f"       Причина: {rec['reason']}")
+        print(f"       Правило: {rec['rule']}")
+
+    # Достижимость
+    print(f"\n  Достижимость действий:")
+    for name, val in sorted(result.reachability.items(), key=lambda x: -x[1])[:8]:
+        bar = "█" * int(val * 20)
+        print(f"    {name[:25]:<25s} {val:.0%} {bar}")
+
+    # Визуализация
+    p_analysis = plot_ontology_analysis(result)
+    print(f"\n  Визуализация: {p_analysis}")
