@@ -502,6 +502,271 @@ def plot_org_comparison(result: OrgComparisonResult,
 # ═══════════════════════════════════════════════════════════════════════════
 # ДЕМОНСТРАЦИЯ
 # ═══════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
+# СЕТЕВОЙ АНАЛИЗ ОРГСТРУКТУРЫ (Social Network Analysis)
+# ═══════════════════════════════════════════════════════════════════════════
+@dataclass
+class NetworkMetrics:
+    """Метрики сетевого анализа оргструктуры."""
+    # Основные
+    n_nodes: int = 0                    # число вершин
+    n_edges: int = 0                    # число рёбер (связей подчинения)
+    density: float = 0.0                # плотность = E / (N*(N-1)/2)
+    # Центральность
+    degree_centrality: Dict[str, float] = field(default_factory=dict)
+    betweenness_centrality: Dict[str, float] = field(default_factory=dict)
+    closeness_centrality: Dict[str, float] = field(default_factory=dict)
+    # Структурные
+    diameter: int = 0                   # диаметр графа (макс. кратчайший путь)
+    avg_path_length: float = 0.0        # средняя длина кратчайшего пути
+    clustering_coeff: float = 0.0       # коэффициент кластеризации
+    # Иерархические
+    span_of_control: Dict[str, int] = field(default_factory=dict)  # число подчинённых
+    avg_span: float = 0.0              # средний span of control
+    max_span: int = 0                   # максимальный span of control
+    hierarchy_index: float = 0.0        # Крэкхардт (0=плоская, 1=дерево)
+    # Информационные
+    freeman_centralization: float = 0.0 # централизация Фримена [0; 1]
+    information_entropy: float = 0.0    # энтропия распределения связей
+
+
+def compute_network_metrics(snapshot: OrgSnapshot) -> NetworkMetrics:
+    """Вычислить все метрики сетевого анализа для снимка оргструктуры."""
+    nodes = snapshot.nodes
+    n = len(nodes)
+    if n <= 1:
+        return NetworkMetrics(n_nodes=n)
+
+    metrics = NetworkMetrics(n_nodes=n)
+    name_to_idx = {node.name: i for i, node in enumerate(nodes)}
+
+    # Построить матрицу смежности (неориентированную)
+    adj = np.zeros((n, n), dtype=int)
+    edges = []
+    for node in nodes:
+        if node.parent and node.parent in name_to_idx:
+            i = name_to_idx[node.name]
+            j = name_to_idx[node.parent]
+            adj[i, j] = 1
+            adj[j, i] = 1
+            edges.append((i, j))
+
+    metrics.n_edges = len(edges)
+
+    # ── Плотность ────────────────────────────────────────────────
+    max_edges = n * (n - 1) / 2
+    metrics.density = metrics.n_edges / max_edges if max_edges > 0 else 0
+
+    # ── Степень вершин (degree) ──────────────────────────────────
+    degrees = adj.sum(axis=1)
+    for node in nodes:
+        i = name_to_idx[node.name]
+        metrics.degree_centrality[node.name] = float(degrees[i]) / max(1, n - 1)
+
+    # ── Span of control (число непосредственных подчинённых) ─────
+    for node in nodes:
+        subordinates = sum(1 for other in nodes if other.parent == node.name)
+        metrics.span_of_control[node.name] = subordinates
+    spans = list(metrics.span_of_control.values())
+    metrics.avg_span = float(np.mean(spans)) if spans else 0
+    metrics.max_span = max(spans) if spans else 0
+
+    # ── Кратчайшие пути (BFS) ────────────────────────────────────
+    dist = np.full((n, n), np.inf)
+    np.fill_diagonal(dist, 0)
+    for i, j in edges:
+        dist[i, j] = 1
+        dist[j, i] = 1
+    # Флойд-Уоршелл
+    for k in range(n):
+        for i in range(n):
+            for j in range(n):
+                if dist[i, k] + dist[k, j] < dist[i, j]:
+                    dist[i, j] = dist[i, k] + dist[k, j]
+
+    finite = dist[dist < np.inf]
+    nonzero = finite[finite > 0]
+    if len(nonzero) > 0:
+        metrics.avg_path_length = float(np.mean(nonzero))
+        metrics.diameter = int(np.max(nonzero))
+
+    # ── Closeness centrality ─────────────────────────────────────
+    for node in nodes:
+        i = name_to_idx[node.name]
+        row = dist[i, :]
+        reachable = row[row < np.inf]
+        total_dist = reachable.sum()
+        metrics.closeness_centrality[node.name] = \
+            float((len(reachable) - 1) / total_dist) if total_dist > 0 else 0
+
+    # ── Betweenness centrality (приближённая) ────────────────────
+    between = np.zeros(n)
+    for s in range(n):
+        for t in range(s + 1, n):
+            if dist[s, t] == np.inf:
+                continue
+            # Число кратчайших путей через каждый узел
+            for v in range(n):
+                if v == s or v == t:
+                    continue
+                if abs(dist[s, v] + dist[v, t] - dist[s, t]) < 0.5:
+                    between[v] += 1
+    norm = max(1, (n - 1) * (n - 2) / 2)
+    for node in nodes:
+        i = name_to_idx[node.name]
+        metrics.betweenness_centrality[node.name] = float(between[i] / norm)
+
+    # ── Коэффициент кластеризации ────────────────────────────────
+    cc_list = []
+    for i in range(n):
+        neighbors = [j for j in range(n) if adj[i, j] > 0]
+        k = len(neighbors)
+        if k < 2:
+            cc_list.append(0.0)
+            continue
+        links = sum(1 for a in neighbors for b in neighbors
+                    if a < b and adj[a, b] > 0)
+        cc_list.append(2.0 * links / (k * (k - 1)))
+    metrics.clustering_coeff = float(np.mean(cc_list))
+
+    # ── Централизация Фримена ────────────────────────────────────
+    dc_vals = list(metrics.degree_centrality.values())
+    if dc_vals:
+        max_dc = max(dc_vals)
+        sum_diff = sum(max_dc - d for d in dc_vals)
+        max_possible = (n - 1) * (n - 2) / max(1, n * (n - 1) / 2)
+        metrics.freeman_centralization = \
+            float(sum_diff / max_possible) if max_possible > 0 else 0
+
+    # ── Индекс иерархии Крэкхардта ──────────────────────────────
+    # = 1 - (число избыточных рёбер) / (N-1)
+    # Для дерева: edges = N-1, индекс = 1
+    # Для полного графа: индекс → 0
+    if n > 1:
+        metrics.hierarchy_index = \
+            1.0 - max(0, metrics.n_edges - (n - 1)) / max(1, n - 1)
+
+    # ── Информационная энтропия ──────────────────────────────────
+    if degrees.sum() > 0:
+        probs = degrees / degrees.sum()
+        probs = probs[probs > 0]
+        metrics.information_entropy = float(-np.sum(probs * np.log2(probs)))
+
+    return metrics
+
+
+def plot_network_analysis(snapshot: OrgSnapshot,
+                          metrics: NetworkMetrics,
+                          filename: str = "org_network.png") -> str:
+    """Визуализация результатов сетевого анализа."""
+    fig, axes = plt.subplots(2, 3, figsize=(16, 9), facecolor="white")
+
+    nodes = snapshot.nodes
+    names = [n.name for n in nodes]
+
+    # 1. Degree centrality
+    ax = axes[0, 0]
+    dc = [metrics.degree_centrality.get(n, 0) for n in names]
+    colors = [ROLE_COLORS.get(node.role, "#95a5a6") for node in nodes]
+    ax.barh(range(len(names)), dc, color=colors, edgecolor="white")
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=8)
+    ax.set_xlabel("Центральность по степени")
+    ax.set_title("Степенная центральность", fontweight="bold", fontsize=10)
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 2. Betweenness centrality
+    ax = axes[0, 1]
+    bc = [metrics.betweenness_centrality.get(n, 0) for n in names]
+    ax.barh(range(len(names)), bc, color=colors, edgecolor="white")
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=8)
+    ax.set_xlabel("Центральность по посредничеству")
+    ax.set_title("Посредническая центральность", fontweight="bold", fontsize=10)
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 3. Span of control
+    ax = axes[0, 2]
+    spans = [metrics.span_of_control.get(n, 0) for n in names]
+    ax.barh(range(len(names)), spans, color=colors, edgecolor="white")
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=8)
+    ax.set_xlabel("Число подчинённых")
+    ax.set_title("Диапазон управления (Span of Control)", fontweight="bold",
+                 fontsize=10)
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 4. Сводные метрики (текст)
+    ax = axes[1, 0]
+    ax.axis("off")
+    text_lines = [
+        f"Вершин:              {metrics.n_nodes}",
+        f"Рёбер:               {metrics.n_edges}",
+        f"Плотность:           {metrics.density:.3f}",
+        f"Диаметр:             {metrics.diameter}",
+        f"Средний путь:        {metrics.avg_path_length:.2f}",
+        f"Кластеризация:       {metrics.clustering_coeff:.3f}",
+        f"Централизация:       {metrics.freeman_centralization:.3f}",
+        f"Индекс иерархии:     {metrics.hierarchy_index:.3f}",
+        f"Энтропия:            {metrics.information_entropy:.3f}",
+        f"Средний span:        {metrics.avg_span:.1f}",
+        f"Макс. span:          {metrics.max_span}",
+    ]
+    ax.text(0.05, 0.95, "\n".join(text_lines), transform=ax.transAxes,
+            fontsize=10, fontfamily="monospace", va="top",
+            bbox=dict(boxstyle="round", facecolor="#f5f6fa"))
+    ax.set_title("Сводные метрики сети", fontweight="bold", fontsize=10)
+
+    # 5. Closeness centrality
+    ax = axes[1, 1]
+    cc = [metrics.closeness_centrality.get(n, 0) for n in names]
+    ax.barh(range(len(names)), cc, color=colors, edgecolor="white")
+    ax.set_yticks(range(len(names)))
+    ax.set_yticklabels(names, fontsize=8)
+    ax.set_xlabel("Центральность по близости")
+    ax.set_title("Центральность по близости", fontweight="bold", fontsize=10)
+    ax.grid(True, axis="x", alpha=0.3)
+
+    # 6. Граф (простая визуализация)
+    ax = axes[1, 2]
+    ax.set_xlim(-1.5, 1.5)
+    ax.set_ylim(-1.5, 1.5)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title("Граф оргструктуры", fontweight="bold", fontsize=10)
+
+    n = len(nodes)
+    pos = {}
+    for i, node in enumerate(nodes):
+        angle = 2 * math.pi * i / n
+        r = 0.8 + 0.3 * node.level
+        pos[node.name] = (r * math.cos(angle), r * math.sin(angle))
+
+    # Рёбра
+    for node in nodes:
+        if node.parent and node.parent in pos and node.name in pos:
+            x1, y1 = pos[node.parent]
+            x2, y2 = pos[node.name]
+            ax.plot([x1, x2], [y1, y2], color="#bdc3c7", linewidth=1.5,
+                    zorder=1)
+
+    # Вершины
+    for node in nodes:
+        if node.name in pos:
+            x, y = pos[node.name]
+            color = ROLE_COLORS.get(node.role, "#95a5a6")
+            size = 200 + 300 * metrics.degree_centrality.get(node.name, 0)
+            ax.scatter(x, y, s=size, c=color, edgecolors="white",
+                       linewidth=1.5, zorder=2)
+            ax.text(x, y - 0.15, node.name, ha="center", fontsize=7,
+                    fontweight="bold", zorder=3)
+
+    fig.suptitle(f"Сетевой анализ оргструктуры (t = Ч+{snapshot.t} мин)",
+                 fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    return _save(fig, filename)
+
+
 def demo():
     """Демо с данными из встроенных сценариев."""
     import sys, io
@@ -534,6 +799,20 @@ def demo():
     p2 = plot_org_dynamics(dyn_a, title="Оргструктура: Сценарий А (ранг №4)",
                            filename="org_dynamics_a.png")
     print(f"  Динамика: {p2}")
+
+    # Сетевой анализ
+    net = compute_network_metrics(peak)
+    print(f"\n  Сетевой анализ (t={peak.t} мин):")
+    print(f"    Плотность:       {net.density:.3f}")
+    print(f"    Диаметр:         {net.diameter}")
+    print(f"    Средний путь:    {net.avg_path_length:.2f}")
+    print(f"    Кластеризация:   {net.clustering_coeff:.3f}")
+    print(f"    Централизация:   {net.freeman_centralization:.3f}")
+    print(f"    Индекс иерархии: {net.hierarchy_index:.3f}")
+    print(f"    Энтропия:        {net.information_entropy:.3f}")
+    print(f"    Средний span:    {net.avg_span:.1f}")
+    p_net = plot_network_analysis(peak, net, filename="org_network_a.png")
+    print(f"  Сетевой анализ: {p_net}")
 
     # Сценарий Б
     print("\nАнализ оргструктуры: Сценарий Б (ранг №2)")
