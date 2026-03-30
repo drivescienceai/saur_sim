@@ -525,7 +525,7 @@ class TankFireSim:
     """
 
     def __init__(self, seed: int = 42, training: bool = True,
-                 scenario: str = "tuapse"):
+                 scenario: str = "serp"):
         self.rng      = random.Random(seed)
         self.np_rng   = np.random.RandomState(seed)
         self.agent    = QLAgent(seed=seed)
@@ -1882,7 +1882,7 @@ class TankFireApp(tk.Tk):
 
         # В режиме имитации — training=False, агент не обучается
         _training = mode not in ("imitation", "sppр")
-        self._scenario_key = "tuapse"
+        self._scenario_key = "serp"
         self.sim       = TankFireSim(seed=42, training=_training,
                                      scenario=self._scenario_key)
         self._running  = False
@@ -2666,7 +2666,7 @@ class TankFireApp(tk.Tk):
     def _refresh_reference(self):
         ph  = self._ref_phase_var.get()
         # Используем словарь действий текущего сценария (если задан), иначе глобальный
-        scen_cfg = SCENARIOS.get(getattr(self, "_scenario_key", "tuapse"), {})
+        scen_cfg = SCENARIOS.get(getattr(self, "_scenario_key", "serp"), {})
         scen_acts = scen_cfg.get("actions_by_phase")
         if scen_acts is None:
             scen_acts = ACTIONS_BY_PHASE
@@ -4328,7 +4328,7 @@ class TankFireApp(tk.Tk):
 
     def _get_norms_text(self) -> str:
         """Нормативные требования для текущего сценария."""
-        key = getattr(self, "_scenario_key", "tuapse")
+        key = getattr(self, "_scenario_key", "serp")
         cfg = SCENARIOS[key]
         S   = cfg["initial_fire_area"]
         I   = cfg["foam_intensity"]
