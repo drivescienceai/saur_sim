@@ -767,6 +767,172 @@ def plot_network_analysis(snapshot: OrgSnapshot,
     return _save(fig, filename)
 
 
+def plot_network_dynamics(dynamics: OrgDynamics,
+                          step: int = 0,
+                          filename: str = "org_net_dynamics.png") -> str:
+    """Динамика ВСЕХ сетевых метрик во времени."""
+    snapshots = dynamics.snapshots
+    if not snapshots:
+        return ""
+
+    # Вычислить метрики для каждого снимка
+    times = []
+    m_density = []
+    m_diameter = []
+    m_avg_path = []
+    m_clustering = []
+    m_centralization = []
+    m_hierarchy = []
+    m_entropy = []
+    m_avg_span = []
+
+    sample_step = max(1, len(snapshots) // 60)
+    for i, snap in enumerate(snapshots):
+        if i % sample_step != 0 and i != len(snapshots) - 1:
+            continue
+        net = compute_network_metrics(snap)
+        times.append(snap.t)
+        m_density.append(net.density)
+        m_diameter.append(net.diameter)
+        m_avg_path.append(net.avg_path_length)
+        m_clustering.append(net.clustering_coeff)
+        m_centralization.append(net.freeman_centralization)
+        m_hierarchy.append(net.hierarchy_index)
+        m_entropy.append(net.information_entropy)
+        m_avg_span.append(net.avg_span)
+
+    fig, axes = plt.subplots(2, 4, figsize=(18, 8), facecolor="white")
+    metrics_data = [
+        (axes[0, 0], m_density, "Плотность графа", "#3498db"),
+        (axes[0, 1], m_diameter, "Диаметр графа", "#e74c3c"),
+        (axes[0, 2], m_avg_path, "Средний кратчайший путь", "#27ae60"),
+        (axes[0, 3], m_clustering, "Коэф. кластеризации", "#e67e22"),
+        (axes[1, 0], m_centralization, "Централизация Фримена", "#8e44ad"),
+        (axes[1, 1], m_hierarchy, "Индекс иерархии Крэкхардта", "#c0392b"),
+        (axes[1, 2], m_entropy, "Энтропия связей (Шеннон)", "#1abc9c"),
+        (axes[1, 3], m_avg_span, "Средний Span of Control", "#f39c12"),
+    ]
+
+    for ax, data, title, color in metrics_data:
+        ax.plot(times, data, color=color, linewidth=2)
+        ax.fill_between(times, data, alpha=0.15, color=color)
+        ax.set_title(title, fontsize=9, fontweight="bold")
+        ax.set_xlabel("Время (мин)", fontsize=7)
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(labelsize=7)
+        # Отметить смены РТП
+        for t_ch, _, _ in dynamics.rtp_changes:
+            ax.axvline(t_ch, color="#bdc3c7", linestyle="--", alpha=0.5)
+
+    fig.suptitle("Динамика сетевых метрик оргструктуры",
+                 fontsize=13, fontweight="bold")
+    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    return _save(fig, filename)
+
+
+def plot_adjacency_matrix(snapshot: OrgSnapshot,
+                          filename: str = "org_adjacency.png") -> str:
+    """Матрица смежности оргструктуры."""
+    nodes = snapshot.nodes
+    n = len(nodes)
+    if n < 2:
+        return ""
+
+    names = [nd.name for nd in nodes]
+    name_to_idx = {nd.name: i for i, nd in enumerate(nodes)}
+    adj = np.zeros((n, n))
+    for nd in nodes:
+        if nd.parent and nd.parent in name_to_idx:
+            i, j = name_to_idx[nd.name], name_to_idx[nd.parent]
+            adj[i, j] = 1
+            adj[j, i] = 1
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor="white")
+    im = ax.imshow(adj, cmap="YlOrRd", vmin=0, vmax=1)
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(names, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(names, fontsize=8)
+    for i in range(n):
+        for j in range(n):
+            if adj[i, j] > 0:
+                ax.text(j, i, "1", ha="center", va="center",
+                        fontsize=10, fontweight="bold", color="white")
+    fig.colorbar(im, ax=ax, shrink=0.7, label="Связь")
+    ax.set_title(f"Матрица смежности оргструктуры (t=Ч+{snapshot.t} мин)",
+                 fontsize=11, fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
+def plot_centrality_comparison(snapshot: OrgSnapshot,
+                               metrics: NetworkMetrics,
+                               filename: str = "org_centrality_cmp.png") -> str:
+    """Сравнение 3 типов центральности для каждого узла."""
+    nodes = snapshot.nodes
+    names = [n.name for n in nodes]
+    n = len(names)
+
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.6)), facecolor="white")
+    x = np.arange(n)
+    w = 0.25
+
+    dc = [metrics.degree_centrality.get(nm, 0) for nm in names]
+    bc = [metrics.betweenness_centrality.get(nm, 0) for nm in names]
+    cc = [metrics.closeness_centrality.get(nm, 0) for nm in names]
+
+    ax.barh(x - w, dc, w, label="По степени", color="#3498db", edgecolor="white")
+    ax.barh(x, bc, w, label="По посредничеству", color="#e67e22", edgecolor="white")
+    ax.barh(x + w, cc, w, label="По близости", color="#27ae60", edgecolor="white")
+
+    ax.set_yticks(x)
+    ax.set_yticklabels(names, fontsize=9)
+    ax.set_xlabel("Центральность", fontsize=10)
+    ax.set_title("Сравнение трёх типов центральности",
+                 fontsize=12, fontweight="bold")
+    ax.legend(fontsize=9, loc="lower right")
+    ax.grid(True, axis="x", alpha=0.3)
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
+def plot_span_of_control(snapshot: OrgSnapshot,
+                         metrics: NetworkMetrics,
+                         filename: str = "org_span.png") -> str:
+    """Диапазон управления (span of control) каждого руководителя."""
+    nodes = snapshot.nodes
+    fig, ax = plt.subplots(figsize=(8, 5), facecolor="white")
+
+    managers = [(n.name, metrics.span_of_control.get(n.name, 0))
+                for n in nodes if metrics.span_of_control.get(n.name, 0) > 0]
+    if not managers:
+        managers = [(nodes[0].name, 0)] if nodes else [("—", 0)]
+
+    names = [m[0] for m in managers]
+    spans = [m[1] for m in managers]
+    colors = [ROLE_COLORS.get(next((n.role for n in nodes if n.name == nm), ""),
+              "#95a5a6") for nm in names]
+
+    ax.bar(range(len(names)), spans, color=colors, edgecolor="white", width=0.6)
+    ax.set_xticks(range(len(names)))
+    ax.set_xticklabels(names, fontsize=9)
+    ax.set_ylabel("Число подчинённых")
+    ax.set_title(f"Диапазон управления (средний: {metrics.avg_span:.1f}, "
+                 f"макс: {metrics.max_span})", fontsize=11, fontweight="bold")
+    ax.grid(True, axis="y", alpha=0.3)
+
+    # Порог Нормана (7±2)
+    ax.axhline(7, color="#c0392b", linestyle="--", alpha=0.5,
+               label="Порог Нормана (7)")
+    ax.legend(fontsize=8)
+
+    for i, s in enumerate(spans):
+        ax.text(i, s + 0.1, str(s), ha="center", fontsize=10, fontweight="bold")
+
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
 def demo():
     """Демо с данными из встроенных сценариев."""
     import sys, io
@@ -813,6 +979,16 @@ def demo():
     print(f"    Средний span:    {net.avg_span:.1f}")
     p_net = plot_network_analysis(peak, net, filename="org_network_a.png")
     print(f"  Сетевой анализ: {p_net}")
+
+    # Дополнительные визуализации
+    p_dyn = plot_network_dynamics(dyn_a, filename="org_net_dynamics_a.png")
+    print(f"  Динамика метрик: {p_dyn}")
+    p_adj = plot_adjacency_matrix(peak, filename="org_adjacency_a.png")
+    print(f"  Матрица смежности: {p_adj}")
+    p_cc = plot_centrality_comparison(peak, net, filename="org_centrality_a.png")
+    print(f"  Сравнение центральностей: {p_cc}")
+    p_sp = plot_span_of_control(peak, net, filename="org_span_a.png")
+    print(f"  Диапазон управления: {p_sp}")
 
     # Сценарий Б
     print("\nАнализ оргструктуры: Сценарий Б (ранг №2)")

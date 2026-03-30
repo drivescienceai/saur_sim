@@ -980,6 +980,191 @@ def plot_ontology_analysis(result: OntologyAnalysisResult,
     return _save(fig, filename)
 
 
+def plot_reachability_heatmap(analyzer: OntologyAnalyzer,
+                             filename: str = "onto_reachability.png") -> str:
+    """Тепловая карта достижимости действий при разных наборах ресурсов."""
+    resource_sets = [
+        ("Всё есть", {"pns": True, "voda": True, "pena": True,
+                       "stvol": True, "vodoist": True}),
+        ("Нет ПНС", {"pns": False, "voda": False, "pena": True,
+                      "stvol": True, "vodoist": True}),
+        ("Нет пены", {"pns": True, "voda": True, "pena": False,
+                       "stvol": True, "vodoist": True}),
+        ("Нет стволов", {"pns": True, "voda": True, "pena": True,
+                          "stvol": False, "vodoist": True}),
+        ("Минимум", {"pns": False, "voda": False, "pena": False,
+                      "stvol": False, "vodoist": True}),
+    ]
+
+    actions_names = []
+    matrix = []
+    for label, resources in resource_sets:
+        reach = analyzer.goal_reachability(resources)
+        if not actions_names:
+            actions_names = [n.split()[0][:6] for n in reach.keys()]
+        matrix.append(list(reach.values()))
+
+    matrix = np.array(matrix)
+    fig, ax = plt.subplots(figsize=(12, 5), facecolor="white")
+    im = ax.imshow(matrix, cmap="RdYlGn", vmin=0, vmax=1, aspect="auto")
+    ax.set_xticks(range(len(actions_names)))
+    ax.set_xticklabels(actions_names, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(len(resource_sets)))
+    ax.set_yticklabels([s[0] for s in resource_sets], fontsize=9)
+
+    for i in range(len(resource_sets)):
+        for j in range(len(actions_names)):
+            v = matrix[i, j]
+            ax.text(j, i, f"{v:.0%}", ha="center", va="center",
+                    fontsize=8, fontweight="bold",
+                    color="white" if v < 0.4 else "black")
+
+    fig.colorbar(im, ax=ax, shrink=0.8, label="Достижимость")
+    ax.set_title("Достижимость действий при различных ресурсах",
+                 fontsize=12, fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
+def plot_precondition_graph(analyzer: OntologyAnalyzer,
+                            filename: str = "onto_preconditions.png") -> str:
+    """Граф цепочек предусловий для ключевых действий."""
+    chains = analyzer.precondition_chains()
+    fig, ax = plt.subplots(figsize=(14, 7), facecolor="white")
+    ax.set_xlim(0, 14)
+    ax.set_ylim(0, len(chains) * 2 + 1)
+    ax.axis("off")
+
+    colors = ["#c0392b", "#2980b9", "#27ae60", "#e67e22"]
+    y = len(chains) * 2 - 0.5
+
+    for ci, (action, steps) in enumerate(chains.items()):
+        color = colors[ci % len(colors)]
+        # Название действия
+        ax.add_patch(plt.Rectangle((0.2, y - 0.3), 3, 0.6,
+                     facecolor=color, edgecolor="white", linewidth=1.5,
+                     alpha=0.85))
+        ax.text(1.7, y, action[:25], ha="center", va="center",
+                fontsize=8, fontweight="bold", color="white")
+
+        # Цепочка предусловий
+        for si, step in enumerate(steps):
+            x = 4 + si * 2
+            ax.add_patch(plt.Rectangle((x - 0.9, y - 0.25), 1.8, 0.5,
+                         facecolor="#f5f6fa", edgecolor=color,
+                         linewidth=1))
+            ax.text(x, y, step[:20], ha="center", va="center",
+                    fontsize=6, color="#2c3e50")
+            if si > 0:
+                ax.annotate("", xy=(x - 0.9, y), xytext=(x - 1.1, y),
+                            arrowprops=dict(arrowstyle="->", color=color, lw=1.5))
+        # Стрелка от действия к первому предусловию
+        ax.annotate("", xy=(4 - 0.9, y), xytext=(3.2, y),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=1.5))
+        y -= 2
+
+    ax.set_title("Цепочки предусловий для ключевых действий",
+                 fontsize=12, fontweight="bold", pad=15)
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
+def plot_ontology_relation_matrix(onto: FireOntology,
+                                  filename: str = "onto_relations.png") -> str:
+    """Матрица отношений между типами сущностей."""
+    types = list(EntityType)
+    n = len(types)
+    matrix = np.zeros((n, n))
+
+    for rel in onto.relations:
+        subj = onto.entities.get(rel.subject)
+        obj = onto.entities.get(rel.object)
+        if subj and obj:
+            i = types.index(subj.entity_type)
+            j = types.index(obj.entity_type)
+            matrix[i, j] += 1
+
+    fig, ax = plt.subplots(figsize=(10, 8), facecolor="white")
+    im = ax.imshow(matrix, cmap="YlOrRd", aspect="auto")
+    labels = [t.value[:12] for t in types]
+    ax.set_xticks(range(n))
+    ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=8)
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(labels, fontsize=8)
+
+    for i in range(n):
+        for j in range(n):
+            if matrix[i, j] > 0:
+                ax.text(j, i, f"{int(matrix[i, j])}", ha="center",
+                        va="center", fontsize=9, fontweight="bold",
+                        color="white" if matrix[i, j] > 2 else "black")
+
+    fig.colorbar(im, ax=ax, shrink=0.8, label="Число отношений")
+    ax.set_xlabel("Объект отношения", fontsize=10)
+    ax.set_ylabel("Субъект отношения", fontsize=10)
+    ax.set_title("Матрица отношений между типами сущностей",
+                 fontsize=12, fontweight="bold")
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
+def plot_rule_coverage(onto: FireOntology,
+                       filename: str = "onto_rules.png") -> str:
+    """Визуализация правил: какие сущности связаны с какими правилами."""
+    fig, ax = plt.subplots(figsize=(12, 6), facecolor="white")
+    ax.set_xlim(0, 12)
+    ax.set_ylim(0, len(onto.rules) + 1)
+    ax.axis("off")
+
+    colors_prio = ["#c0392b", "#e67e22", "#27ae60", "#3498db",
+                   "#8e44ad", "#1abc9c", "#566573"]
+    for i, rule in enumerate(onto.rules):
+        y = len(onto.rules) - i
+        color = colors_prio[i % len(colors_prio)]
+
+        # Блок правила
+        ax.add_patch(plt.Rectangle((0.2, y - 0.35), 2.5, 0.7,
+                     facecolor=color, edgecolor="white", alpha=0.85))
+        ax.text(1.45, y, f"{rule.id}: {rule.name[:18]}", ha="center",
+                va="center", fontsize=7, fontweight="bold", color="white")
+
+        # Условие
+        ax.add_patch(plt.Rectangle((3, y - 0.25), 4, 0.5,
+                     facecolor="#f5f6fa", edgecolor=color, linewidth=1))
+        ax.text(5, y, rule.condition[:40], ha="center", va="center",
+                fontsize=6, color="#2c3e50")
+
+        # Вывод
+        ax.add_patch(plt.Rectangle((7.5, y - 0.25), 4, 0.5,
+                     facecolor=color, edgecolor="white", alpha=0.3))
+        ax.text(9.5, y, rule.conclusion[:40], ha="center", va="center",
+                fontsize=6, color="#2c3e50")
+
+        # Стрелка условие → вывод
+        ax.annotate("", xy=(7.5, y), xytext=(7.0, y),
+                    arrowprops=dict(arrowstyle="->", color=color, lw=1.5))
+
+        # Источник
+        if rule.source:
+            ax.text(11.8, y, rule.source[:15], ha="right", va="center",
+                    fontsize=5, color="#7f8c8d", style="italic")
+
+    # Заголовки колонок
+    ax.text(1.45, len(onto.rules) + 0.5, "Правило", ha="center",
+            fontsize=9, fontweight="bold")
+    ax.text(5, len(onto.rules) + 0.5, "Условие", ha="center",
+            fontsize=9, fontweight="bold")
+    ax.text(9.5, len(onto.rules) + 0.5, "Вывод", ha="center",
+            fontsize=9, fontweight="bold")
+    ax.text(11.8, len(onto.rules) + 0.5, "Источник", ha="right",
+            fontsize=9, fontweight="bold")
+
+    ax.set_title("Правила (аксиомы) онтологии тушения пожара",
+                 fontsize=12, fontweight="bold", pad=15)
+    fig.tight_layout()
+    return _save(fig, filename)
+
+
 if __name__ == "__main__":
     import sys, io
     if sys.platform == "win32":
@@ -1047,6 +1232,14 @@ if __name__ == "__main__":
         bar = "█" * int(val * 20)
         print(f"    {name[:25]:<25s} {val:.0%} {bar}")
 
-    # Визуализация
+    # Визуализации
     p_analysis = plot_ontology_analysis(result)
-    print(f"\n  Визуализация: {p_analysis}")
+    print(f"\n  Визуализация основная: {p_analysis}")
+    p_reach = plot_reachability_heatmap(analyzer)
+    print(f"  Достижимость: {p_reach}")
+    p_prec = plot_precondition_graph(analyzer)
+    print(f"  Предусловия: {p_prec}")
+    p_rel = plot_ontology_relation_matrix(onto)
+    print(f"  Матрица отношений: {p_rel}")
+    p_rules = plot_rule_coverage(onto)
+    print(f"  Правила: {p_rules}")
