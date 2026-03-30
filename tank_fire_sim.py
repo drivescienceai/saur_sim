@@ -5610,6 +5610,8 @@ class TankFireApp(tk.Tk):
         self._fc_metrics.draw()
 
         # ── RL-агент: Q-значения, частота действий, кривая наград ────────────
+        if not hasattr(self, "_ax_qval"):
+            return
         for ax in [self._ax_qval, self._ax_actcnt, self._ax_reward]:
             ax.cla()
             ax.set_facecolor(P["canvas"])
